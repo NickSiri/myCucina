@@ -1,5 +1,6 @@
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
 import { useState, useEffect } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -8,7 +9,237 @@ import {
   SafeAreaView, TextInput, Modal, ActivityIndicator
 } from 'react-native';
 
-// ── MOCK DATA ──────────────────────────────────────────────
+// ── RECIPE DATABASE ────────────────────────────────────────
+const RECIPES = [
+  {
+    id: 1,
+    name: 'Chicken Cacciatore',
+    time: '45 min',
+    difficulty: 'Medium',
+    keywords: ['chicken'],
+    ingredients: [
+      '2 lbs chicken thighs',
+      '1 can crushed tomatoes',
+      '1 onion, diced',
+      '3 cloves garlic',
+      '1 cup chicken broth',
+      '1 tsp oregano',
+      'Salt and pepper',
+    ],
+    steps: [
+      'Season chicken with salt and pepper.',
+      'Brown chicken in olive oil over medium-high heat, 4 min per side. Remove and set aside.',
+      'Sauté onion and garlic in same pan until soft, about 3 minutes.',
+      'Add tomatoes, broth, and oregano. Stir to combine.',
+      'Return chicken to pan. Simmer covered for 30 minutes until cooked through.',
+      'Serve over pasta or crusty bread.',
+    ],
+  },
+  {
+    id: 2,
+    name: 'Chicken Stir Fry',
+    time: '20 min',
+    difficulty: 'Easy',
+    keywords: ['chicken', 'cabbage'],
+    ingredients: [
+      '1 lb chicken breast, sliced thin',
+      '2 cups cabbage, shredded',
+      '2 tbsp soy sauce',
+      '1 tbsp sesame oil',
+      '3 cloves garlic',
+      '1 tsp ginger',
+      '2 tbsp vegetable oil',
+    ],
+    steps: [
+      'Heat oil in a wok or large pan over high heat.',
+      'Add chicken and cook until golden, about 4 minutes. Remove and set aside.',
+      'Add garlic and ginger, stir 30 seconds.',
+      'Add cabbage and stir fry 3 minutes until slightly wilted.',
+      'Return chicken to pan. Add soy sauce and sesame oil.',
+      'Toss everything together and serve over rice.',
+    ],
+  },
+  {
+    id: 3,
+    name: 'Coleslaw',
+    time: '15 min',
+    difficulty: 'Easy',
+    keywords: ['cabbage'],
+    ingredients: [
+      '4 cups green cabbage, shredded',
+      '1 cup mayonnaise',
+      '2 tbsp apple cider vinegar',
+      '1 tbsp sugar',
+      '1 tsp celery seed',
+      'Salt and pepper to taste',
+    ],
+    steps: [
+      'Shred cabbage finely and place in a large bowl.',
+      'In a separate bowl, whisk together mayo, vinegar, sugar, and celery seed.',
+      'Pour dressing over cabbage and toss to coat.',
+      'Season with salt and pepper.',
+      'Refrigerate at least 30 minutes before serving for best flavor.',
+    ],
+  },
+  {
+    id: 4,
+    name: 'Whipped Cream Pavlova',
+    time: '1 hr 30 min',
+    difficulty: 'Hard',
+    keywords: ['cream', 'eggs', 'raspberries'],
+    ingredients: [
+      '4 egg whites',
+      '1 cup sugar',
+      '1 tsp vanilla extract',
+      '1 tsp white vinegar',
+      '2 cups heavy whipping cream',
+      '1 cup raspberries',
+    ],
+    steps: [
+      'Preheat oven to 275°F. Draw a 9-inch circle on parchment paper.',
+      'Beat egg whites until stiff peaks form. Gradually add sugar, beating until glossy.',
+      'Fold in vanilla and vinegar.',
+      'Spread meringue onto circle, making edges slightly higher than center.',
+      'Bake 1 hour 15 minutes until dry to the touch. Cool completely in oven.',
+      'Whip cream to soft peaks. Spread over cooled meringue.',
+      'Top with raspberries and serve immediately.',
+    ],
+  },
+  {
+    id: 5,
+    name: 'Raspberry Fool',
+    time: '15 min',
+    difficulty: 'Easy',
+    keywords: ['raspberries', 'cream'],
+    ingredients: [
+      '2 cups raspberries',
+      '2 cups heavy whipping cream',
+      '3 tbsp powdered sugar',
+      '1 tsp vanilla extract',
+    ],
+    steps: [
+      'Crush half the raspberries with a fork. Leave the rest whole.',
+      'Whip cream with powdered sugar and vanilla to soft peaks.',
+      'Gently fold crushed raspberries into cream to create a swirl.',
+      'Spoon into glasses and top with whole raspberries.',
+      'Serve immediately or chill up to 2 hours.',
+    ],
+  },
+  {
+    id: 6,
+    name: 'French Omelette',
+    time: '10 min',
+    difficulty: 'Medium',
+    keywords: ['eggs'],
+    ingredients: [
+      '3 large eggs',
+      '1 tbsp butter',
+      '2 tbsp milk',
+      'Salt and pepper',
+      'Fresh herbs (optional)',
+    ],
+    steps: [
+      'Crack eggs into a bowl, add milk, salt and pepper. Whisk until combined.',
+      'Melt butter in a non-stick pan over medium heat.',
+      'Pour in egg mixture. Let set slightly on bottom.',
+      'Using a spatula, gently push cooked edges toward center while tilting pan.',
+      'When mostly set but still slightly wet on top, fold in thirds.',
+      'Slide onto plate and serve immediately.',
+    ],
+  },
+  {
+    id: 7,
+    name: 'Spring Mix Salad with Creamy Dressing',
+    time: '10 min',
+    difficulty: 'Easy',
+    keywords: ['spring mix', 'cream'],
+    ingredients: [
+      '4 cups spring mix',
+      '1/4 cup heavy cream',
+      '2 tbsp lemon juice',
+      '1 tsp dijon mustard',
+      '1 clove garlic, minced',
+      'Salt and pepper',
+      'Shaved parmesan (optional)',
+    ],
+    steps: [
+      'Whisk together cream, lemon juice, mustard, and garlic.',
+      'Season dressing with salt and pepper.',
+      'Place spring mix in a large bowl.',
+      'Drizzle dressing over greens and toss gently.',
+      'Top with shaved parmesan if using and serve immediately.',
+    ],
+  },
+  {
+    id: 8,
+    name: 'Elote (Mexican Street Corn)',
+    time: '20 min',
+    difficulty: 'Easy',
+    keywords: ['corn'],
+    ingredients: [
+      '4 ears corn on the cob',
+      '1/4 cup mayonnaise',
+      '1/4 cup sour cream',
+      '1/2 cup cotija cheese, crumbled',
+      '1 tsp chili powder',
+      '1 lime, juiced',
+      'Fresh cilantro',
+    ],
+    steps: [
+      'Grill or roast corn until charred in spots, about 10 minutes.',
+      'Mix mayonnaise and sour cream together.',
+      'Brush corn with mayo mixture while still hot.',
+      'Sprinkle with cotija cheese and chili powder.',
+      'Squeeze lime juice over everything.',
+      'Garnish with cilantro and serve immediately.',
+    ],
+  },
+  {
+    id: 9,
+    name: 'Yogurt Parfait',
+    time: '5 min',
+    difficulty: 'Easy',
+    keywords: ['yogurt', 'raspberries'],
+    ingredients: [
+      '2 cups strawberry yogurt',
+      '1 cup raspberries',
+      '1/2 cup granola',
+      '2 tbsp honey',
+    ],
+    steps: [
+      'Spoon half the yogurt into two glasses or bowls.',
+      'Add a layer of granola.',
+      'Add a layer of raspberries.',
+      'Top with remaining yogurt.',
+      'Finish with more granola, raspberries, and a drizzle of honey.',
+    ],
+  },
+  {
+    id: 10,
+    name: 'Rotisserie Chicken Tacos',
+    time: '15 min',
+    difficulty: 'Easy',
+    keywords: ['chicken', 'rotisserie'],
+    ingredients: [
+      '2 cups rotisserie chicken, shredded',
+      '8 small corn tortillas',
+      '1 cup spring mix or cabbage, shredded',
+      '1/2 cup sour cream',
+      '1 lime, juiced',
+      '1 tsp cumin',
+      'Hot sauce to taste',
+    ],
+    steps: [
+      'Warm tortillas in a dry pan or directly over a gas flame.',
+      'Mix sour cream with lime juice and cumin.',
+      'Shred chicken and warm in a pan with a splash of water.',
+      'Assemble tacos: chicken, greens, crema.',
+      'Finish with hot sauce and serve immediately.',
+    ],
+  },
+];
+
+// ── MOCK INVENTORY ─────────────────────────────────────────
 const INITIAL_INVENTORY = [
   { id: 1, name: 'Boneless Skinless Chicken Thighs', expiryDate: new Date(2026, 4, 8), category: 'Meat' },
   { id: 2, name: 'Green Cabbage', expiryDate: new Date(2026, 4, 9), category: 'Produce' },
@@ -41,6 +272,114 @@ function getUrgencyColor(days) {
 
 function formatExpiryDate(date) {
   return new Date(date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+function getRecipesForItem(itemName) {
+  const lower = itemName.toLowerCase();
+  return RECIPES.filter(recipe =>
+    recipe.keywords.some(keyword => lower.includes(keyword))
+  );
+}
+
+// ── RECIPE DETAIL SCREEN ───────────────────────────────────
+function RecipeDetailScreen({ route, navigation }) {
+  const { recipe } = route.params;
+  return (
+    <SafeAreaView style={styles.container}>
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => navigation.goBack()}>
+          <Text style={styles.backButton}>‹ Back</Text>
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>myCucina</Text>
+      </View>
+      <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
+        <View style={styles.recipeHero}>
+          <Text style={styles.recipeName}>{recipe.name}</Text>
+          <View style={styles.recipeMeta}>
+            <Text style={styles.recipeMetaText}>⏱ {recipe.time}</Text>
+            <Text style={styles.recipeMetaText}>📊 {recipe.difficulty}</Text>
+          </View>
+        </View>
+
+        <Text style={styles.sectionHeader}>Ingredients</Text>
+        <View style={styles.card}>
+          {recipe.ingredients.map((ing, i) => (
+            <View key={i} style={[styles.ingredientRow, i < recipe.ingredients.length - 1 && styles.ingredientBorder]}>
+              <Text style={styles.ingredientDot}>•</Text>
+              <Text style={styles.ingredientText}>{ing}</Text>
+            </View>
+          ))}
+        </View>
+
+        <Text style={styles.sectionHeader}>Instructions</Text>
+        <View style={styles.card}>
+          {recipe.steps.map((step, i) => (
+            <View key={i} style={[styles.stepRow, i < recipe.steps.length - 1 && styles.ingredientBorder]}>
+              <View style={styles.stepNumber}>
+                <Text style={styles.stepNumberText}>{i + 1}</Text>
+              </View>
+              <Text style={styles.stepText}>{step}</Text>
+            </View>
+          ))}
+        </View>
+        <View style={{ height: 40 }} />
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+// ── ITEM SUGGESTIONS SCREEN ────────────────────────────────
+function SuggestionsScreen({ route, navigation }) {
+  const { item } = route.params;
+  const days = getDaysUntilExpiry(item.expiryDate);
+  const color = getUrgencyColor(days);
+  const recipes = getRecipesForItem(item.name);
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => navigation.goBack()}>
+          <Text style={styles.backButton}>‹ Back</Text>
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>myCucina</Text>
+      </View>
+
+      <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
+        <View style={styles.suggestionHero}>
+          <View style={[styles.urgencyBadge, { backgroundColor: color }]}>
+            <Text style={styles.urgencyBadgeText}>
+              {days <= 0 ? 'Expired' : days === 1 ? '1 day left' : `${days} days left`}
+            </Text>
+          </View>
+          <Text style={styles.suggestionItemName}>{item.name}</Text>
+          <Text style={styles.suggestionSubtitle}>Use it in one of these recipes</Text>
+        </View>
+
+        {recipes.length === 0 ? (
+          <View style={styles.placeholder}>
+            <Text style={styles.placeholderText}>🤔</Text>
+            <Text style={styles.placeholderLabel}>No recipes found</Text>
+            <Text style={styles.placeholderSub}>We'll add more recipes soon</Text>
+          </View>
+        ) : (
+          recipes.map(recipe => (
+            <TouchableOpacity
+              key={recipe.id}
+              style={styles.recipeCard}
+              onPress={() => navigation.navigate('RecipeDetail', { recipe })}
+            >
+              <View style={styles.recipeCardInfo}>
+                <Text style={styles.recipeCardName}>{recipe.name}</Text>
+                <Text style={styles.recipeCardMeta}>{recipe.time} · {recipe.difficulty}</Text>
+              </View>
+              <Text style={styles.chevron}>›</Text>
+            </TouchableOpacity>
+          ))
+        )}
+        <View style={{ height: 40 }} />
+      </ScrollView>
+    </SafeAreaView>
+  );
 }
 
 // ── ITEM MODAL ─────────────────────────────────────────────
@@ -128,7 +467,7 @@ function ItemModal({ visible, item, onSave, onDelete, onClose }) {
 }
 
 // ── USE SOON SCREEN ────────────────────────────────────────
-function UseSoonScreen({ inventory }) {
+function UseSoonScreen({ inventory, navigation }) {
   const sorted = [...inventory].sort((a, b) => new Date(a.expiryDate) - new Date(b.expiryDate));
   return (
     <SafeAreaView style={styles.container}>
@@ -141,7 +480,11 @@ function UseSoonScreen({ inventory }) {
           const days = getDaysUntilExpiry(item.expiryDate);
           const color = getUrgencyColor(days);
           return (
-            <TouchableOpacity key={item.id} style={styles.itemRow}>
+            <TouchableOpacity
+              key={item.id}
+              style={styles.itemRow}
+              onPress={() => navigation.navigate('Suggestions', { item })}
+            >
               <View style={[styles.dot, { backgroundColor: color }]} />
               <View style={styles.itemInfo}>
                 <Text style={styles.itemName}>{item.name}</Text>
@@ -294,12 +637,24 @@ function FavoritesScreen() {
 
 // ── NAVIGATION ─────────────────────────────────────────────
 const Tab = createBottomTabNavigator();
+const Stack = createNativeStackNavigator();
+
+function UseSoonStack({ inventory }) {
+  return (
+    <Stack.Navigator screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="UseSoonMain">
+        {({ navigation }) => <UseSoonScreen inventory={inventory} navigation={navigation} />}
+      </Stack.Screen>
+      <Stack.Screen name="Suggestions" component={SuggestionsScreen} />
+      <Stack.Screen name="RecipeDetail" component={RecipeDetailScreen} />
+    </Stack.Navigator>
+  );
+}
 
 export default function App() {
   const [inventory, setInventory] = useState([]);
   const [loaded, setLoaded] = useState(false);
 
-  // Load inventory from storage on app open
   useEffect(() => {
     async function loadInventory() {
       try {
@@ -318,7 +673,6 @@ export default function App() {
     loadInventory();
   }, []);
 
-  // Save inventory to storage whenever it changes
   useEffect(() => {
     if (!loaded) return;
     async function saveInventory() {
@@ -366,7 +720,7 @@ export default function App() {
           name="Use Soon"
           options={{ tabBarIcon: () => <Text style={{ fontSize: 20 }}>⚠️</Text> }}
         >
-          {() => <UseSoonScreen inventory={inventory} />}
+          {() => <UseSoonStack inventory={inventory} />}
         </Tab.Screen>
         <Tab.Screen
           name="Inventory"
@@ -403,6 +757,8 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
     borderBottomWidth: 1,
     borderBottomColor: '#E5E5EA',
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   headerTitle: {
     fontSize: 13,
@@ -410,12 +766,19 @@ const styles = StyleSheet.create({
     color: '#007AFF',
     textTransform: 'uppercase',
     letterSpacing: 1,
+    flex: 1,
+    textAlign: 'center',
   },
   headerSubtitle: {
     fontSize: 28,
     fontWeight: '700',
     color: '#1C1C1E',
     marginTop: 2,
+  },
+  backButton: {
+    fontSize: 17,
+    color: '#007AFF',
+    fontWeight: '500',
   },
   scrollView: { flex: 1, paddingTop: 12 },
   sectionHeader: {
@@ -528,4 +891,131 @@ const styles = StyleSheet.create({
   placeholderText: { fontSize: 60, marginBottom: 12 },
   placeholderLabel: { fontSize: 18, fontWeight: '600', color: '#1C1C1E' },
   placeholderSub: { fontSize: 14, color: '#8E8E93', marginTop: 4 },
+  suggestionHero: {
+    backgroundColor: '#FFFFFF',
+    marginHorizontal: 16,
+    marginTop: 12,
+    borderRadius: 16,
+    padding: 20,
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  urgencyBadge: {
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 20,
+    marginBottom: 10,
+  },
+  urgencyBadgeText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: 13,
+  },
+  suggestionItemName: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#1C1C1E',
+    textAlign: 'center',
+    marginBottom: 4,
+  },
+  suggestionSubtitle: {
+    fontSize: 14,
+    color: '#8E8E93',
+  },
+  recipeCard: {
+    backgroundColor: '#FFFFFF',
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    marginHorizontal: 16,
+    marginBottom: 8,
+    borderRadius: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+  },
+  recipeCardInfo: { flex: 1 },
+  recipeCardName: { fontSize: 16, fontWeight: '600', color: '#1C1C1E' },
+  recipeCardMeta: { fontSize: 13, color: '#8E8E93', marginTop: 3 },
+  recipeHero: {
+    backgroundColor: '#FFFFFF',
+    marginHorizontal: 16,
+    marginTop: 12,
+    borderRadius: 16,
+    padding: 20,
+    marginBottom: 8,
+  },
+  recipeName: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#1C1C1E',
+    marginBottom: 10,
+  },
+  recipeMeta: {
+    flexDirection: 'row',
+    gap: 16,
+  },
+  recipeMetaText: {
+    fontSize: 14,
+    color: '#8E8E93',
+    fontWeight: '500',
+  },
+  card: {
+    backgroundColor: '#FFFFFF',
+    marginHorizontal: 16,
+    marginBottom: 8,
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  ingredientRow: {
+    flexDirection: 'row',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    alignItems: 'flex-start',
+  },
+  ingredientBorder: {
+    borderBottomWidth: 1,
+    borderBottomColor: '#F2F2F7',
+  },
+  ingredientDot: {
+    fontSize: 16,
+    color: '#007AFF',
+    marginRight: 10,
+    marginTop: 1,
+  },
+  ingredientText: {
+    fontSize: 15,
+    color: '#1C1C1E',
+    flex: 1,
+  },
+  stepRow: {
+    flexDirection: 'row',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    alignItems: 'flex-start',
+  },
+  stepNumber: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#007AFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+    marginTop: 1,
+    flexShrink: 0,
+  },
+  stepNumberText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  stepText: {
+    fontSize: 15,
+    color: '#1C1C1E',
+    flex: 1,
+    lineHeight: 22,
+  },
 });
