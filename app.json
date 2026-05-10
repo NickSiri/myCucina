@@ -1,6 +1,9 @@
 {
   "expo": {
     "name": "myCucina",
+    "extra": {
+      "anthropicKey": ""
+    }
     "slug": "myCucina",
     "version": "1.0.0",
     "orientation": "portrait",

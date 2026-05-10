@@ -255,6 +255,8 @@ const INITIAL_INVENTORY = [
 const CATEGORIES = ['Produce', 'Meat', 'Dairy', 'Pantry', 'Frozen', 'Other'];
 const STORAGE_KEY = 'myCucina_inventory';
 const FAVORITES_KEY = 'myCucina_favorites';
+import Constants from 'expo-constants';
+const ANTHROPIC_KEY = Constants.expoConfig?.extra?.anthropicKey;
 
 // ── HELPERS ────────────────────────────────────────────────
 function getDaysUntilExpiry(expiryDate) {
@@ -287,6 +289,139 @@ const DIFFICULTY_COLORS = {
   'Hard': '#FF3B30',
 };
 
+// ── CLAUDE API ─────────────────────────────────────────────
+async function getSuggestionsFromClaude(inventory) {
+  console.log('API KEY:', ANTHROPIC_KEY ? 'Found' : 'MISSING');
+  const itemList = inventory
+    .map(item => {
+      const days = getDaysUntilExpiry(item.expiryDate);
+      return `- ${item.name} (${days <= 0 ? 'expired' : days === 1 ? '1 day left' : `${days} days left`})`;
+    })
+    .join('\n');
+
+  const prompt = `Here is my current fridge and pantry inventory with days until expiry:
+
+${itemList}
+
+Suggest exactly 3 recipes I could make that would best use the ingredients closest to expiring. For each recipe, give me:
+1. A recipe name
+2. A single short sentence explaining which expiring ingredients it uses and why it's a good choice right now
+3. A difficulty level (Easy, Medium, or Hard)
+4. An estimated cook time
+
+Respond ONLY with a JSON array, no other text, in this exact format:
+[
+  {
+    "name": "Recipe Name",
+    "reason": "Uses your chicken thighs and cabbage before they expire",
+    "difficulty": "Easy",
+    "time": "20 min"
+  }
+]`;
+
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': ANTHROPIC_KEY,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true',
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-5',
+      max_tokens: 1024,
+      messages: [{ role: 'user', content: prompt }],
+    }),
+  });
+
+ const data = await response.json();
+  console.log('API RESPONSE:', JSON.stringify(data));
+  const text = data.content[0].text;
+  const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+  return JSON.parse(cleaned);
+}
+
+// ── TONIGHT SCREEN ─────────────────────────────────────────
+function TonightScreen({ inventory, navigation }) {
+  const [loading, setLoading] = useState(false);
+  const [suggestions, setSuggestions] = useState(null);
+  const [error, setError] = useState(null);
+
+  async function handleAsk() {
+    setLoading(true);
+    setError(null);
+    setSuggestions(null);
+   try {
+      const results = await getSuggestionsFromClaude(inventory);
+      setSuggestions(results);
+    } catch (e) {
+      setError(e.message || JSON.stringify(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <View style={[styles.header, { flexDirection: 'column', alignItems: 'flex-start' }]}>
+        <Text style={styles.headerTitle}>myCucina</Text>
+        <Text style={styles.headerSubtitle}>Tonight</Text>
+      </View>
+
+      <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
+        <View style={styles.tonightHero}>
+          <Text style={styles.tonightEmoji}>🍽</Text>
+          <Text style={styles.tonightHeroTitle}>What can I make tonight?</Text>
+          <Text style={styles.tonightHeroSub}>
+            We'll look at what's in your kitchen and find the best options before anything goes to waste.
+          </Text>
+          <TouchableOpacity
+            style={[styles.tonightButton, loading && styles.tonightButtonDisabled]}
+            onPress={handleAsk}
+            disabled={loading}
+          >
+            {loading ? (
+              <ActivityIndicator color="#FFFFFF" />
+            ) : (
+              <Text style={styles.tonightButtonText}>
+                {suggestions ? 'Refresh suggestions' : 'Show me what I can make'}
+              </Text>
+            )}
+          </TouchableOpacity>
+        </View>
+
+        {error && (
+          <View style={styles.errorBox}>
+            <Text style={styles.errorText}>{error}</Text>
+          </View>
+        )}
+
+        {suggestions && (
+          <View>
+            <Text style={styles.sectionHeader}>Based on your kitchen right now</Text>
+            {suggestions.map((s, i) => (
+              <View key={i} style={styles.suggestionCard}>
+                <View style={styles.suggestionCardTop}>
+                  <Text style={styles.suggestionCardName}>{s.name}</Text>
+                  <View style={styles.suggestionCardMeta}>
+                    <Text style={styles.recipeCardMeta}>⏱ {s.time}</Text>
+                    <Text style={[styles.recipeCardMeta, { color: DIFFICULTY_COLORS[s.difficulty] || '#8E8E93' }]}>
+                      ● {s.difficulty}
+                    </Text>
+                  </View>
+                </View>
+                <Text style={styles.suggestionReason}>{s.reason}</Text>
+              </View>
+            ))}
+          </View>
+        )}
+
+        <View style={{ height: 40 }} />
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
 // ── RECIPE DETAIL SCREEN ───────────────────────────────────
 function RecipeDetailScreen({ route, navigation, favorites, onToggleFavorite }) {
   const { recipe } = route.params;
@@ -313,7 +448,6 @@ function RecipeDetailScreen({ route, navigation, favorites, onToggleFavorite }) 
             </Text>
           </View>
         </View>
-
         <Text style={styles.sectionHeader}>Ingredients</Text>
         <View style={styles.card}>
           {recipe.ingredients.map((ing, i) => (
@@ -323,7 +457,6 @@ function RecipeDetailScreen({ route, navigation, favorites, onToggleFavorite }) 
             </View>
           ))}
         </View>
-
         <Text style={styles.sectionHeader}>Instructions</Text>
         <View style={styles.card}>
           {recipe.steps.map((step, i) => (
@@ -367,7 +500,6 @@ function SuggestionsScreen({ route, navigation, favorites, onToggleFavorite }) {
           <Text style={styles.suggestionItemName}>{item.name}</Text>
           <Text style={styles.suggestionSubtitle}>Use it in one of these recipes</Text>
         </View>
-
         {recipes.length === 0 ? (
           <View style={styles.placeholder}>
             <Text style={styles.placeholderText}>🤔</Text>
@@ -390,7 +522,7 @@ function SuggestionsScreen({ route, navigation, favorites, onToggleFavorite }) {
                   </Text>
                 </View>
               </View>
-              <Text style={favorites.includes(recipe.id) ? styles.favStarActive : styles.favStar}>
+              <Text style={{ fontSize: 20 }}>
                 {favorites.includes(recipe.id) ? '⭐️' : '☆'}
               </Text>
             </TouchableOpacity>
@@ -405,12 +537,10 @@ function SuggestionsScreen({ route, navigation, favorites, onToggleFavorite }) {
 // ── RECIPE LIST SCREEN ─────────────────────────────────────
 function RecipeListScreen({ navigation, favorites, onToggleFavorite }) {
   const [search, setSearch] = useState('');
-
   const filtered = RECIPES.filter(r =>
     r.name.toLowerCase().includes(search.toLowerCase()) ||
     r.keywords.some(k => k.toLowerCase().includes(search.toLowerCase()))
   );
-
   const sections = [
     { title: 'Easy', data: filtered.filter(r => r.difficulty === 'Easy') },
     { title: 'Medium', data: filtered.filter(r => r.difficulty === 'Medium') },
@@ -475,7 +605,6 @@ function RecipeListScreen({ navigation, favorites, onToggleFavorite }) {
 // ── FAVORITES SCREEN ───────────────────────────────────────
 function FavoritesScreen({ navigation, favorites, onToggleFavorite }) {
   const favoriteRecipes = RECIPES.filter(r => favorites.includes(r.id));
-
   return (
     <SafeAreaView style={styles.container}>
       <View style={[styles.header, { flexDirection: 'column', alignItems: 'flex-start' }]}>
@@ -728,22 +857,12 @@ function UseSoonStack({ inventory, favorites, onToggleFavorite }) {
       </Stack.Screen>
       <Stack.Screen name="Suggestions">
         {({ route, navigation }) => (
-          <SuggestionsScreen
-            route={route}
-            navigation={navigation}
-            favorites={favorites}
-            onToggleFavorite={onToggleFavorite}
-          />
+          <SuggestionsScreen route={route} navigation={navigation} favorites={favorites} onToggleFavorite={onToggleFavorite} />
         )}
       </Stack.Screen>
       <Stack.Screen name="RecipeDetail">
         {({ route, navigation }) => (
-          <RecipeDetailScreen
-            route={route}
-            navigation={navigation}
-            favorites={favorites}
-            onToggleFavorite={onToggleFavorite}
-          />
+          <RecipeDetailScreen route={route} navigation={navigation} favorites={favorites} onToggleFavorite={onToggleFavorite} />
         )}
       </Stack.Screen>
     </Stack.Navigator>
@@ -755,21 +874,12 @@ function RecipesStack({ favorites, onToggleFavorite }) {
     <Stack.Navigator screenOptions={{ headerShown: false }}>
       <Stack.Screen name="RecipeListMain">
         {({ navigation }) => (
-          <RecipeListScreen
-            navigation={navigation}
-            favorites={favorites}
-            onToggleFavorite={onToggleFavorite}
-          />
+          <RecipeListScreen navigation={navigation} favorites={favorites} onToggleFavorite={onToggleFavorite} />
         )}
       </Stack.Screen>
       <Stack.Screen name="RecipeDetail">
         {({ route, navigation }) => (
-          <RecipeDetailScreen
-            route={route}
-            navigation={navigation}
-            favorites={favorites}
-            onToggleFavorite={onToggleFavorite}
-          />
+          <RecipeDetailScreen route={route} navigation={navigation} favorites={favorites} onToggleFavorite={onToggleFavorite} />
         )}
       </Stack.Screen>
     </Stack.Navigator>
@@ -781,22 +891,23 @@ function FavoritesStack({ favorites, onToggleFavorite }) {
     <Stack.Navigator screenOptions={{ headerShown: false }}>
       <Stack.Screen name="FavoritesMain">
         {({ navigation }) => (
-          <FavoritesScreen
-            navigation={navigation}
-            favorites={favorites}
-            onToggleFavorite={onToggleFavorite}
-          />
+          <FavoritesScreen navigation={navigation} favorites={favorites} onToggleFavorite={onToggleFavorite} />
         )}
       </Stack.Screen>
       <Stack.Screen name="FavRecipeDetail">
         {({ route, navigation }) => (
-          <RecipeDetailScreen
-            route={route}
-            navigation={navigation}
-            favorites={favorites}
-            onToggleFavorite={onToggleFavorite}
-          />
+          <RecipeDetailScreen route={route} navigation={navigation} favorites={favorites} onToggleFavorite={onToggleFavorite} />
         )}
+      </Stack.Screen>
+    </Stack.Navigator>
+  );
+}
+
+function TonightStack({ inventory }) {
+  return (
+    <Stack.Navigator screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="TonightMain">
+        {({ navigation }) => <TonightScreen inventory={inventory} navigation={navigation} />}
       </Stack.Screen>
     </Stack.Navigator>
   );
@@ -862,13 +973,15 @@ export default function App() {
           tabBarStyle: { backgroundColor: '#FFFFFF', borderTopColor: '#E5E5EA' },
         }}
       >
+        <Tab.Screen name="Tonight" options={{ tabBarIcon: () => <Text style={{ fontSize: 20 }}>🍽</Text> }}>
+          {() => <TonightStack inventory={inventory} />}
+        </Tab.Screen>
         <Tab.Screen name="Use Soon" options={{ tabBarIcon: () => <Text style={{ fontSize: 20 }}>⚠️</Text> }}>
           {() => <UseSoonStack inventory={inventory} favorites={favorites} onToggleFavorite={handleToggleFavorite} />}
         </Tab.Screen>
         <Tab.Screen name="Inventory" options={{ tabBarIcon: () => <Text style={{ fontSize: 20 }}>🥦</Text> }}>
           {() => <InventoryScreen inventory={inventory} onAdd={handleAdd} onEdit={handleEdit} onDelete={handleDelete} />}
         </Tab.Screen>
-        <Tab.Screen name="Scan" component={ScanScreen} options={{ tabBarIcon: () => <Text style={{ fontSize: 20 }}>📷</Text> }} />
         <Tab.Screen name="Recipes" options={{ tabBarIcon: () => <Text style={{ fontSize: 20 }}>🍳</Text> }}>
           {() => <RecipesStack favorites={favorites} onToggleFavorite={handleToggleFavorite} />}
         </Tab.Screen>
@@ -956,8 +1069,6 @@ const styles = StyleSheet.create({
   expiryDate: { fontSize: 14, fontWeight: '500', color: '#1C1C1E' },
   daysLeft: { fontSize: 12, fontWeight: '600', marginTop: 2 },
   chevron: { fontSize: 20, color: '#C7C7CC', marginLeft: 8 },
-  favStar: { fontSize: 20, color: '#C7C7CC' },
-  favStarActive: { fontSize: 20 },
   fab: {
     position: 'absolute',
     bottom: 24,
@@ -1118,4 +1229,62 @@ const styles = StyleSheet.create({
   },
   stepNumberText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' },
   stepText: { fontSize: 15, color: '#1C1C1E', flex: 1, lineHeight: 22 },
+  tonightHero: {
+    backgroundColor: '#FFFFFF',
+    marginHorizontal: 16,
+    marginTop: 12,
+    borderRadius: 16,
+    padding: 24,
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  tonightEmoji: { fontSize: 48, marginBottom: 12 },
+  tonightHeroTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#1C1C1E',
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  tonightHeroSub: {
+    fontSize: 14,
+    color: '#8E8E93',
+    textAlign: 'center',
+    lineHeight: 20,
+    marginBottom: 20,
+  },
+  tonightButton: {
+    backgroundColor: '#007AFF',
+    paddingHorizontal: 24,
+    paddingVertical: 14,
+    borderRadius: 30,
+    minWidth: 220,
+    alignItems: 'center',
+  },
+  tonightButtonDisabled: { backgroundColor: '#C7C7CC' },
+  tonightButtonText: { color: '#FFFFFF', fontWeight: '700', fontSize: 16 },
+  suggestionCard: {
+    backgroundColor: '#FFFFFF',
+    marginHorizontal: 16,
+    marginBottom: 8,
+    borderRadius: 12,
+    padding: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+  },
+  suggestionCardTop: { marginBottom: 8 },
+  suggestionCardName: { fontSize: 17, fontWeight: '600', color: '#1C1C1E', marginBottom: 4 },
+  suggestionCardMeta: { flexDirection: 'row', gap: 12 },
+  suggestionReason: { fontSize: 14, color: '#8E8E93', lineHeight: 20 },
+  errorBox: {
+    backgroundColor: '#FFF2F2',
+    marginHorizontal: 16,
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#FFD0D0',
+  },
+  errorText: { color: '#FF3B30', fontSize: 14, textAlign: 'center' },
 });
