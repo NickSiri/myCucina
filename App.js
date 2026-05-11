@@ -255,8 +255,7 @@ const INITIAL_INVENTORY = [
 const CATEGORIES = ['Produce', 'Meat', 'Dairy', 'Pantry', 'Frozen', 'Other'];
 const STORAGE_KEY = 'myCucina_inventory';
 const FAVORITES_KEY = 'myCucina_favorites';
-import Constants from 'expo-constants';
-const ANTHROPIC_KEY = Constants.expoConfig?.extra?.anthropicKey;
+const ANTHROPIC_KEY = process.env.EXPO_PUBLIC_ANTHROPIC_KEY;
 
 // ── HELPERS ────────────────────────────────────────────────
 function getDaysUntilExpiry(expiryDate) {
