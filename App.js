@@ -255,7 +255,6 @@ const INITIAL_INVENTORY = [
 const CATEGORIES = ['Produce', 'Meat', 'Dairy', 'Pantry', 'Frozen', 'Other'];
 const STORAGE_KEY = 'myCucina_inventory';
 const FAVORITES_KEY = 'myCucina_favorites';
-const ANTHROPIC_KEY = process.env.EXPO_PUBLIC_ANTHROPIC_KEY;
 
 // ── HELPERS ────────────────────────────────────────────────
 function getDaysUntilExpiry(expiryDate) {
@@ -290,54 +289,19 @@ const DIFFICULTY_COLORS = {
 
 // ── CLAUDE API ─────────────────────────────────────────────
 async function getSuggestionsFromClaude(inventory) {
-  console.log('API KEY:', ANTHROPIC_KEY ? 'Found' : 'MISSING');
-  const itemList = inventory
-    .map(item => {
-      const days = getDaysUntilExpiry(item.expiryDate);
-      return `- ${item.name} (${days <= 0 ? 'expired' : days === 1 ? '1 day left' : `${days} days left`})`;
-    })
-    .join('\n');
+  const itemList = inventory.map(item => ({
+    name: item.name,
+    daysLeft: Math.max(0, getDaysUntilExpiry(item.expiryDate))
+  }));
 
-  const prompt = `Here is my current fridge and pantry inventory with days until expiry:
-
-${itemList}
-
-Suggest exactly 3 recipes I could make that would best use the ingredients closest to expiring. For each recipe, give me:
-1. A recipe name
-2. A single short sentence explaining which expiring ingredients it uses and why it's a good choice right now
-3. A difficulty level (Easy, Medium, or Hard)
-4. An estimated cook time
-
-Respond ONLY with a JSON array, no other text, in this exact format:
-[
-  {
-    "name": "Recipe Name",
-    "reason": "Uses your chicken thighs and cabbage before they expire",
-    "difficulty": "Easy",
-    "time": "20 min"
-  }
-]`;
-
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
+  const response = await fetch('http://192.168.50.202:5002/suggest', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': ANTHROPIC_KEY,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true',
-    },
-    body: JSON.stringify({
-      model: 'claude-sonnet-4-5',
-      max_tokens: 1024,
-      messages: [{ role: 'user', content: prompt }],
-    }),
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ inventory: itemList }),
   });
 
- const data = await response.json();
-  console.log('API RESPONSE:', JSON.stringify(data));
-  const text = data.content[0].text;
-  const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-  return JSON.parse(cleaned);
+  const data = await response.json();
+  return data.suggestions;
 }
 
 // ── TONIGHT SCREEN ─────────────────────────────────────────
