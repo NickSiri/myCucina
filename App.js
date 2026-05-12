@@ -157,12 +157,53 @@ function getRecipesForItem(itemName, allRecipes) {
   );
 }
 
-function formatIngredient(ing) {
-  if (typeof ing === 'string') return ing;
-  const qty = ing.quantity ? ing.quantity : '';
+const FRACTIONS = [
+  [1, '1'], [0.75, '¾'], [0.667, '⅔'], [0.5, '½'],
+  [0.333, '⅓'], [0.25, '¼'], [0.125, '⅛'],
+];
+
+const IMPERIAL_UNITS = ['tsp', 'tbsp', 'cup', 'fl_oz'];
+const METRIC_UNITS = ['g', 'kg', 'ml', 'l'];
+
+function formatQuantity(qty, unit) {
+  if (!qty) return '—';
+  const isImperial = IMPERIAL_UNITS.includes(unit);
+  const whole = Math.floor(qty);
+  const decimal = qty - whole;
+
+  if (isImperial && decimal > 0) {
+    const frac = FRACTIONS.reduce((best, [val, sym]) =>
+      Math.abs(val - decimal) < Math.abs(best[0] - decimal) ? [val, sym] : best
+    );
+    const wholeStr = whole > 0 ? `${whole} ` : '';
+    return `${wholeStr}${frac[1]}`;
+  }
+
+  if (METRIC_UNITS.includes(unit)) {
+    return qty % 1 === 0 ? String(qty) : qty.toFixed(1);
+  }
+
+  return qty % 1 === 0 ? String(qty) : qty.toFixed(1);
+}
+
+function IngredientRow({ ing }) {
+  if (typeof ing === 'string') {
+    return (
+      <View style={styles.ingRow}>
+        <Text style={styles.ingQty}>—</Text>
+        <Text style={styles.ingName}>{ing}</Text>
+      </View>
+    );
+  }
+  const qtyStr = formatQuantity(ing.quantity, ing.unit);
   const unit = ing.unit ? ` ${ing.unit}` : '';
   const prep = ing.prep ? `, ${ing.prep}` : '';
-  return `${qty}${unit} ${ing.name}${prep}`.trim();
+  return (
+    <View style={styles.ingRow}>
+      <Text style={styles.ingQty}>{qtyStr}{unit}</Text>
+      <Text style={styles.ingName}>{ing.name}{prep}</Text>
+    </View>
+  );
 }
 
 const DIFFICULTY_COLORS = { 'Easy': '#34C759', 'Medium': '#FF9500', 'Hard': '#FF3B30' };
@@ -279,10 +320,7 @@ function ImportRecipeModal({ visible, onClose, onSave }) {
             <View style={styles.card}>
               {parsed.ingredients?.map((ing, i) => (
                 <View key={i} style={[styles.ingredientRow, i < parsed.ingredients.length - 1 && styles.ingredientBorder]}>
-                  <Text style={styles.ingredientDot}>•</Text>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.ingredientText}>{formatIngredient(ing)}</Text>
-                  </View>
+                 <IngredientRow ing={ing} />        
                 </View>
               ))}
             </View>
@@ -335,8 +373,7 @@ function RecipeDetailScreen({ route, navigation, favorites, onToggleFavorite }) 
         <View style={styles.card}>
           {recipe.ingredients?.map((ing, i) => (
             <View key={i} style={[styles.ingredientRow, i < recipe.ingredients.length - 1 && styles.ingredientBorder]}>
-              <Text style={styles.ingredientDot}>•</Text>
-              <Text style={styles.ingredientText}>{formatIngredient(ing)}</Text>
+              <IngredientRow ing={ing} />
             </View>
           ))}
         </View>
@@ -930,4 +967,7 @@ const styles = StyleSheet.create({
   suggestionCardMeta: { flexDirection: 'row', gap: 12 },
   suggestionReason: { fontSize: 14, color: '#8E8E93', lineHeight: 20 },
   errorBox: { backgroundColor: '#FFF2F2', marginHorizontal: 16, borderRadius: 12, padding: 16, borderWidth: 1, borderColor: '#FFD0D0' },
+  ingRow: { flexDirection: 'row', alignItems: 'flex-start', paddingHorizontal: 16, paddingVertical: 12 },
+  ingQty: { fontSize: 14, color: '#8E8E93', width: 80, textAlign: 'left', marginRight: 16, paddingTop: 1 },
+  ingName: { fontSize: 15, color: '#1C1C1E', flex: 1 },
 });
