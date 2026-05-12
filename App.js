@@ -23,6 +23,27 @@ const BUILTIN_RECIPES = [
     steps: ['Season chicken with salt and pepper.','Brown chicken in olive oil over medium-high heat, 4 min per side. Remove and set aside.','Sauté onion and garlic in same pan until soft, about 3 minutes.','Add tomatoes, broth, and oregano. Stir to combine.','Return chicken to pan. Simmer covered for 30 minutes until cooked through.','Serve over pasta or crusty bread.'],
   },
   {
+    id: 99, name: 'Shopping List Display Test', time: '60 min', difficulty: 'Hard', keywords: [],
+    ingredients: [
+      {name: 'Roma Tomato', quantity: 4, unit: null, prep: null},
+      {name: 'Pineapple', quantity: 1, unit: null, prep: 'sliced'},
+      {name: 'Red Grapes', quantity: 2, unit: 'cup', prep: null},
+      {name: 'Cilantro', quantity: 4, unit: 'tbsp', prep: 'chopped'},
+      {name: 'Cherry Tomato', quantity: 1, unit: 'cup', prep: null},
+      {name: 'Black Bean', quantity: 2, unit: null, prep: null},
+      {name: 'Chicken Broth', quantity: 1, unit: null, prep: null},
+      {name: 'Instant Rice', quantity: 1, unit: 'box', prep: null},
+      {name: 'Olive Oil', quantity: 3, unit: 'tbsp', prep: null},
+      {name: 'Butter', quantity: 0.5, unit: 'cup', prep: null},
+      {name: 'Chicken Thigh', quantity: 1.5, unit: 'lb', prep: null},
+      {name: 'Parmesan', quantity: 0.5, unit: 'cup', prep: 'grated'},
+      {name: 'Frozen Peas', quantity: 1, unit: 'cup', prep: null},
+      {name: 'Garlic', quantity: 4, unit: null, prep: 'minced'},
+      {name: 'Yellow Onion', quantity: 1, unit: null, prep: 'diced'},
+    ],
+    steps: ['This recipe is just for testing the shopping list display.'],
+  },
+  {
     id: 2, name: 'Chicken Stir Fry', time: '20 min', difficulty: 'Easy', keywords: ['chicken', 'cabbage'],
     ingredients: [
       {name: 'Chicken Breast', quantity: 1, unit: 'lb', prep: 'sliced thin'},
@@ -127,10 +148,11 @@ const INITIAL_INVENTORY = [
   { id: 10, name: 'Strawberry Yogurt', expiryDate: new Date(2026, 4, 21), category: 'Dairy' },
 ];
 
-const CATEGORIES = ['Produce', 'Meat', 'Dairy', 'Pantry', 'Frozen', 'Other'];
+const CATEGORIES = ['Bakery', 'Produce', 'Meat', 'Dairy', 'Deli', 'Nuts & Dried Fruit', 'Pantry', 'Frozen', 'Beverages', 'Other'];
 const STORAGE_KEY = 'myCucina_inventory';
 const FAVORITES_KEY = 'myCucina_favorites';
 const CUSTOM_RECIPES_KEY = 'myCucina_custom_recipes';
+const SHOPPING_LIST_KEY = 'myCucina_shopping_list';
 const PI_SERVER = 'http://192.168.50.202:5002';
 
 function getDaysUntilExpiry(expiryDate) {
@@ -161,7 +183,6 @@ const FRACTIONS = [
   [1, '1'], [0.75, '¾'], [0.667, '⅔'], [0.5, '½'],
   [0.333, '⅓'], [0.25, '¼'], [0.125, '⅛'],
 ];
-
 const IMPERIAL_UNITS = ['tsp', 'tbsp', 'cup', 'fl_oz'];
 const METRIC_UNITS = ['g', 'kg', 'ml', 'l'];
 
@@ -170,7 +191,6 @@ function formatQuantity(qty, unit) {
   const isImperial = IMPERIAL_UNITS.includes(unit);
   const whole = Math.floor(qty);
   const decimal = qty - whole;
-
   if (isImperial && decimal > 0) {
     const frac = FRACTIONS.reduce((best, [val, sym]) =>
       Math.abs(val - decimal) < Math.abs(best[0] - decimal) ? [val, sym] : best
@@ -178,11 +198,9 @@ function formatQuantity(qty, unit) {
     const wholeStr = whole > 0 ? `${whole} ` : '';
     return `${wholeStr}${frac[1]}`;
   }
-
   if (METRIC_UNITS.includes(unit)) {
     return qty % 1 === 0 ? String(qty) : qty.toFixed(1);
   }
-
   return qty % 1 === 0 ? String(qty) : qty.toFixed(1);
 }
 
@@ -206,7 +224,443 @@ function IngredientRow({ ing }) {
   );
 }
 
+function normalizeIngredientName(name) {
+  return name.toLowerCase().trim()
+    .replace(/\b(fresh|dried|frozen|canned|cooked|raw|boneless|skinless|whole|ground|sliced|diced|chopped|minced|shredded|grated|peeled|pitted|husked)\b/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function checkInventoryMatch(ingredientName, inventory) {
+  const normalized = normalizeIngredientName(ingredientName);
+  const ingWords = normalized.split(' ').filter(w => w.length > 2);
+  for (const item of inventory) {
+    const itemNormalized = normalizeIngredientName(item.name);
+    const itemWords = itemNormalized.split(' ').filter(w => w.length > 2);
+    // Require ALL inventory item words to appear in the ingredient name
+    const allItemWordsMatch = itemWords.every(w => ingWords.includes(w));
+    // AND at least half the ingredient words match the inventory item
+    const matchingIngWords = ingWords.filter(w => itemWords.includes(w));
+    const overlapRatio = ingWords.length > 0 ? matchingIngWords.length / ingWords.length : 0;
+    if (allItemWordsMatch && overlapRatio >= 0.5) {
+      const days = getDaysUntilExpiry(item.expiryDate);
+      return { match: true, item, days };
+    }
+  }
+  return { match: false };
+}
+
+function addRecipeToShoppingList(recipe, currentList) {
+  const newList = [...currentList];
+  recipe.ingredients.forEach(ing => {
+    const ingName = typeof ing === 'string' ? ing : ing.name;
+    const normalized = normalizeIngredientName(ingName);
+    const existing = newList.find(i => normalizeIngredientName(i.name) === normalized);
+    if (existing) {
+      if (ing.quantity && existing.quantity) {
+        existing.quantity += ing.quantity;
+      }
+      if (!existing.recipes.includes(recipe.name)) {
+        existing.recipes.push(recipe.name);
+      }
+    } else {
+      newList.push({
+        id: `${Date.now()}_${Math.random()}`,
+        name: ingName,
+        quantity: typeof ing === 'string' ? null : ing.quantity,
+        unit: typeof ing === 'string' ? null : ing.unit,
+        prep: typeof ing === 'string' ? null : ing.prep,
+        recipes: [recipe.name],
+        checked: false,
+      });
+    }
+  });
+  return newList;
+}
+
 const DIFFICULTY_COLORS = { 'Easy': '#34C759', 'Medium': '#FF9500', 'Hard': '#FF3B30' };
+
+// ── SHOPPING LIST SCREEN ───────────────────────────────────
+const INGREDIENT_CATEGORIES = {
+  Bakery: [
+    'corn tortilla', 'flour tortilla', 'whole wheat tortilla', 'spinach tortilla',
+    'tortilla', 'bread', 'sourdough', 'baguette', 'ciabatta', 'focaccia',
+    'pita', 'naan', 'flatbread', 'lavash', 'wrap', 'pita bread',
+    'bagel', 'english muffin', 'croissant', 'roll', 'dinner roll', 'bun',
+    'hamburger bun', 'hot dog bun', 'brioche', 'challah', 'rye bread',
+    'white bread', 'wheat bread', 'multigrain bread', 'sandwich bread',
+    'muffin', 'scone', 'biscuit', 'cornbread', 'banana bread',
+    'pie crust', 'pizza dough', 'puff pastry', 'phyllo dough',
+    'breadcrumb', 'panko', 'crouton', 'stuffing', 'waffle', 'pancake mix',
+  ],
+  'Nuts & Dried Fruit': [
+  'almond', 'brazil nut', 'candied pecan', 'candied walnut', 'cashew',
+  'chestnut', 'chia seed', 'coconut flake', 'dried apricot', 'dried cherry',
+  'dried cranberry', 'dried date', 'dried fig', 'dried mango', 'dried pineapple',
+  'flax seed', 'hazelnut', 'macadamia nut', 'mixed nut', 'peanut', 'pecan',
+  'pine nut', 'pistachio', 'poppy seed', 'pumpkin seed', 'raisin',
+  'sesame seed', 'sunflower seed', 'trail mix', 'walnut',
+  ],
+  Frozen: [
+    'frozen pea', 'frozen corn', 'frozen carrot', 'frozen mirepoix',
+    'frozen spinach', 'frozen broccoli', 'frozen edamame', 'frozen berry',
+    'frozen fruit', 'frozen vegetable', 'frozen meal', 'frozen pizza',
+    'tater tot', 'frozen waffle', 'ice cream', 'sorbet', 'frozen',
+  ],
+  Meat: [
+    'chicken thigh', 'chicken breast', 'chicken wing', 'chicken drumstick',
+    'chicken leg', 'whole chicken', 'rotisserie chicken', 'ground chicken',
+    'ground beef', 'ground turkey', 'ground pork', 'ground lamb',
+    'beef tenderloin', 'beef brisket', 'beef chuck', 'beef rib',
+    'skirt steak', 'flank steak', 'ribeye', 'sirloin', 'strip steak', 'filet mignon',
+    'pork chop', 'pork loin', 'pork shoulder', 'pork belly', 'pork tenderloin',
+    'baby back rib', 'spare rib',
+    'lamb chop', 'lamb shank', 'rack of lamb', 'leg of lamb',
+    'turkey breast', 'duck breast', 'duck leg',
+    'bacon', 'pancetta', 'prosciutto', 'salami', 'pepperoni', 'chorizo',
+    'sausage', 'italian sausage', 'bratwurst', 'kielbasa', 'hot dog',
+    'ham', 'deli meat', 'lunch meat',
+    'shrimp', 'salmon', 'tuna', 'cod', 'tilapia', 'halibut', 'mahi mahi',
+    'sea bass', 'trout', 'swordfish', 'snapper', 'flounder',
+    'scallop', 'crab', 'lobster', 'clam', 'mussel', 'oyster',
+    'anchovy', 'sardine', 'fish fillet', 'fish',
+    'chicken', 'beef', 'pork', 'lamb', 'turkey', 'duck', 'veal', 'bison', 'venison',
+  ],
+  Dairy: [
+  '1% milk', '2% milk','almond milk', 'buttermilk','coconut milk beverage', 'condensed milk','egg','evaporated milk','ghee',
+  'half and half', 'heavy cream', 'heavy whipping cream','kefir','light cream','milk','oat milk','plain yogurt',
+  'sour cream', 'soy milk', 'strawberry yogurt','vanilla yogurt','whipped cream', 'whole milk', 'yogurt',
+  ],
+  Deli: [
+    'american cheese', 'asiago',
+    'blue cheese', 'brie',
+    'camembert', 'cheddar', 'cheese', 'colby jack', 'cotija cheese', 'cream cheese',
+    'deli meat', 'deli turkey', 'deli chicken', 'deli ham',
+    'feta', 'fontina', 'fresh mozzarella',
+    'goat cheese', 'gouda', 'gruyere',
+    'havarti', 'hummus',
+    'manchego', 'mascarpone', 'monterey jack', 'mozzarella',
+    'parmesan', 'parmigiano', 'pepper jack', 'provolone',
+    'ricotta cheese', 'roquefort',
+    'salami', 'shredded mozzarella', 'smoked gouda', 'swiss cheese',
+    'white cheddar',
+  ],
+  Produce: [
+    'romaine lettuce', 'iceberg lettuce', 'butter lettuce', 'spring mix', 'mixed greens',
+    'baby spinach', 'spinach', 'kale', 'arugula', 'swiss chard', 'collard green',
+    'green cabbage', 'red cabbage', 'napa cabbage', 'bok choy', 'brussels sprout',
+    'broccoli', 'broccolini', 'cauliflower', 'broccoli rabe',
+    'roma tomato', 'cherry tomato', 'grape tomato', 'heirloom tomato', 'beefsteak tomato',
+    'yellow onion', 'red onion', 'white onion', 'sweet onion', 'pearl onion',
+    'green onion', 'scallion', 'shallot', 'leek', 'chive',
+    'garlic clove', 'garlic head', 'garlic',
+    'russet potato', 'red potato', 'yukon gold potato', 'sweet potato', 'yam', 'potato',
+    'jalapeño pepper', 'jalapeño', 'bell pepper', 'red pepper', 'green pepper',
+    'yellow pepper', 'orange pepper', 'serrano pepper', 'habanero', 'poblano',
+    'english cucumber', 'persian cucumber', 'cucumber',
+    'zucchini', 'yellow squash', 'butternut squash', 'acorn squash', 'spaghetti squash',
+    'eggplant', 'mushroom', 'portobello', 'cremini', 'shiitake', 'oyster mushroom',
+    'corn on the cob', 'corn',
+    'asparagus', 'green bean', 'snap pea', 'snow pea', 'edamame', 'pea',
+    'carrot', 'celery', 'beet', 'radish', 'turnip', 'parsnip', 'fennel',
+    'artichoke', 'kohlrabi', 'okra', 'tomatillo', 'jicama',
+    'avocado', 'lemon', 'lime', 'orange', 'grapefruit', 'blood orange',
+    'apple', 'pear', 'peach', 'nectarine', 'plum', 'apricot', 'cherry',
+    'banana', 'mango', 'pineapple', 'papaya', 'passion fruit', 'guava',
+    'strawberry', 'blueberry', 'raspberry', 'blackberry', 'cranberry',
+    'grape', 'watermelon', 'cantaloupe', 'honeydew',
+    'fresh ginger', 'ginger root', 'ginger', 'turmeric root',
+    'fresh cilantro', 'cilantro', 'fresh parsley', 'parsley',
+    'fresh basil', 'basil', 'fresh thyme', 'thyme', 'fresh rosemary', 'rosemary',
+    'fresh sage', 'sage', 'fresh mint', 'mint', 'fresh dill', 'dill',
+    'jalapeño', 'tomato', 'pepper', 'lettuce', 'herb',
+  ],
+  Pantry: [
+    'all purpose flour', 'bread flour', 'whole wheat flour', 'almond flour', 'coconut flour',
+    'granulated sugar', 'brown sugar', 'powdered sugar', 'confectioners sugar',
+    'olive oil', 'vegetable oil', 'canola oil', 'coconut oil', 'sesame oil', 'avocado oil',
+    'red wine vinegar', 'white wine vinegar', 'apple cider vinegar', 'balsamic vinegar', 'rice vinegar',
+    'soy sauce', 'tamari', 'coconut aminos', 'fish sauce', 'oyster sauce', 'hoisin sauce', 'worcestershire',
+    'tomato paste', 'tomato sauce', 'marinara', 'pasta sauce', 'diced tomato', 'crushed tomato',
+    'chicken broth', 'beef broth', 'vegetable broth', 'chicken stock', 'beef stock',
+    'coconut milk', 'evaporated milk', 'condensed milk',
+    'black bean', 'pinto bean', 'kidney bean', 'cannellini bean', 'chickpea', 'lentil',
+    'white rice', 'brown rice', 'basmati rice', 'jasmine rice', 'instant rice', 'arborio rice',
+    'spaghetti', 'penne', 'rigatoni', 'fettuccine', 'linguine', 'farfalle', 'orzo', 'pasta',
+    'panko breadcrumb', 'breadcrumb',
+    'sesame seed','chia seed', 'flax seed',
+    'peanut butter', 'almond butter', 'tahini',
+    'honey', 'maple syrup', 'agave', 'molasses',
+    'dijon mustard', 'yellow mustard', 'whole grain mustard', 'mustard',
+    'mayonnaise', 'ketchup', 'hot sauce', 'sriracha', 'tabasco',
+    'pickle', 'olive', 'caper', 'sun dried tomato',
+    'kosher salt', 'sea salt', 'black pepper', 'white pepper', 'red pepper flake',
+    'garlic powder', 'onion powder', 'paprika', 'smoked paprika', 'cumin', 'coriander',
+    'turmeric', 'curry powder', 'garam masala', 'chili powder', 'cayenne', 'oregano',
+    'italian seasoning', 'bay leaf', 'cinnamon', 'nutmeg', 'cardamom', 'clove',
+    'vanilla extract', 'almond extract', 'baking powder', 'baking soda', 'yeast',
+    'cocoa powder', 'chocolate chip', 'dark chocolate', 'milk chocolate', 'white chocolate',
+    'granola', 'oat', 'rolled oat', 'quick oat',
+    'flour', 'sugar', 'salt', 'oil', 'vinegar', 'sauce', 'broth', 'stock', 'rice', 'macaroni', 'bean',
+  ],
+  Beverages: [
+    'orange juice', 'apple juice', 'grape juice', 'cranberry juice', 'lemon juice', 'lime juice',
+    'sparkling water', 'club soda', 'tonic water',
+    'coffee', 'espresso', 'cold brew',
+    'green tea', 'black tea', 'herbal tea',
+    'kombucha', 'kefir drink',
+    'white wine', 'red wine', 'rosé', 'champagne', 'prosecco',
+    'beer', 'lager', 'ale', 'stout',
+    'vodka', 'gin', 'rum', 'tequila', 'whiskey', 'bourbon',
+    'juice', 'water', 'soda', 'wine', 'tea', 'coffee',
+  ],
+  Other: [],
+};
+
+function matchesKeyword(ingredientName, keyword) {
+  const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const regex = new RegExp(`\\b${escaped}\\b`, 'i');
+  return regex.test(ingredientName);
+}
+
+function categorizeIngredient(name) {
+  const lower = name.toLowerCase();
+  let bestCategory = 'Other';
+  let bestKeywordLength = 0;
+
+  for (const [category, keywords] of Object.entries(INGREDIENT_CATEGORIES)) {
+    if (category === 'Other') continue;
+    for (const keyword of keywords) {
+      if (matchesKeyword(lower, keyword) && keyword.length > bestKeywordLength) {
+        bestCategory = category;
+        bestKeywordLength = keyword.length;
+      }
+    }
+  }
+  return bestCategory;
+}
+const COUNTABLE_UNITS = ['can', 'cans', 'box', 'boxes', 'bag', 'bags', 'jar', 'jars', 'bottle', 'bottles', 'package', 'pkg', 'bunch', 'head', 'loaf', 'loaves', 'dozen', 'pint', 'quart', 'gallon'];
+
+const CANNED_BOXED_KEYWORDS = ['bean', 'chickpea', 'lentil', 'tomato sauce', 'tomato paste', 'diced tomato', 'coconut milk', 'broth', 'stock', 'soup', 'tuna', 'sardine', 'anchovy', 'pumpkin puree', 'instant rice', 'pasta', 'rice', 'cereal', 'cracker', 'chip'];
+
+function formatShoppingQuantity(name, quantity, unit) {
+  if (!quantity && !unit) return null;
+  const lower = name.toLowerCase();
+  const qty = quantity ? formatQuantity(quantity, unit) : '';
+
+  // Explicit container units
+  if (unit && COUNTABLE_UNITS.includes(unit.toLowerCase())) {
+    return `${qty} ${unit}`;
+  }
+
+  // Canned/boxed pantry items with no unit
+  if (!unit && CANNED_BOXED_KEYWORDS.some(k => lower.includes(k))) {
+    return quantity === 1 ? '1 can' : `${quantity} cans`;
+  }
+
+  // Has a volume/weight unit
+  if (unit) {
+    return `${qty} ${unit}`;
+  }
+
+  // Countable with no unit — just the number
+  return `${qty}`;
+}
+function ShoppingListScreen({ shoppingList, inventory, onToggleItem, onClearList, onAddManualItem }) {
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [manualName, setManualName] = useState('');
+  const [manualQty, setManualQty] = useState('');
+  const [manualUnit, setManualUnit] = useState('');
+
+  const enriched = shoppingList.map(item => {
+    const match = checkInventoryMatch(item.name, inventory);
+    const category = item.category || categorizeIngredient(item.name);
+    return { ...item, inventoryMatch: match, category };
+  });
+
+  const needToBuy = enriched.filter(i => !i.inventoryMatch.match && !i.checked);
+  const runningLow = enriched.filter(i => i.inventoryMatch.match && i.inventoryMatch.days <= 5 && !i.checked);
+  const alreadyHave = enriched.filter(i => i.inventoryMatch.match && i.inventoryMatch.days > 5 && !i.checked);
+  const checkedItems = enriched.filter(i => i.checked);
+
+  const CATEGORY_ORDER = ['Bakery', 'Produce', 'Meat', 'Dairy', 'Deli', 'Nuts & Dried Fruit', 'Pantry', 'Frozen', 'Beverages', 'Other'];
+
+  function groupByCategory(items) {
+  const groups = {};
+  for (const item of items) {
+    const cat = item.category || 'Other';
+    if (!groups[cat]) groups[cat] = [];
+    groups[cat].push(item);
+  }
+  return CATEGORY_ORDER
+    .filter(c => groups[c]?.length > 0)
+    .map(c => ({
+      category: c,
+      items: groups[c].sort((a, b) => a.name.localeCompare(b.name)),
+    }));
+}
+
+  function renderItem(item, tint) {
+    const qtyDisplay = formatShoppingQuantity(item.name, item.quantity, item.unit);
+    const recipes = item.recipes?.length > 1 ? item.recipes.join(', ') : item.recipes?.[0] || 'Manual';
+    return (
+      <TouchableOpacity key={item.id} style={[styles.shopRow, item.checked && styles.shopRowChecked]} onPress={() => onToggleItem(item.id)}>
+        <View style={[styles.shopCheck, item.checked && styles.shopCheckDone]}>
+          {item.checked && <Text style={styles.shopCheckMark}>✓</Text>}
+        </View>
+        <View style={styles.shopInfo}>
+          <View style={styles.shopNameRow}>
+            <Text style={[styles.shopName, item.checked && styles.shopNameChecked]}>{item.name}</Text>
+            {qtyDisplay && (
+              <Text style={[styles.shopQty, item.checked && styles.shopNameChecked]}>{qtyDisplay}</Text>
+            )}
+          </View>
+          <Text style={styles.shopRecipe}>{recipes}</Text>
+          {item.inventoryMatch.match && !item.checked && (
+            <Text style={[styles.shopInventoryNote, { color: tint }]}>
+              {item.inventoryMatch.days <= 5
+                ? `${item.inventoryMatch.item.name} in pantry, expires in ${item.inventoryMatch.days} days`
+                : `${item.inventoryMatch.item.name} in pantry`}
+            </Text>
+          )}
+        </View>
+      </TouchableOpacity>
+    );
+  }
+
+  function renderSection(title, items, tint) {
+    if (items.length === 0) return null;
+    const groups = groupByCategory(items);
+    return (
+      <View>
+        <Text style={styles.sectionHeader}>{title}</Text>
+        {groups.map(({ category, items: groupItems }) => (
+          <View key={category}>
+            <Text style={styles.categorySubheader}>{category}</Text>
+            {groupItems.map(item => renderItem(item, tint))}
+          </View>
+        ))}
+      </View>
+    );
+  }
+
+  function renderCheckedSection() {
+    if (checkedItems.length === 0) return null;
+    const groups = groupByCategory(checkedItems);
+    return (
+      <View>
+        <Text style={styles.sectionHeader}>In Cart</Text>
+        {groups.map(({ category, items: groupItems }) => (
+          <View key={category}>
+            <Text style={styles.categorySubheader}>{category}</Text>
+            {groupItems.map(item => renderItem(item, '#8E8E93'))}
+          </View>
+        ))}
+      </View>
+    );
+  }
+
+  function handleManualAdd() {
+    if (!manualName.trim()) return;
+    const qty = manualQty ? parseFloat(manualQty) : null;
+    const unit = manualUnit.trim() || null;
+    onAddManualItem(manualName.trim(), qty, unit);
+    setManualName('');
+    setManualQty('');
+    setManualUnit('');
+    setShowAddModal(false);
+  }
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <View style={[styles.header, { flexDirection: 'column', alignItems: 'flex-start' }]}>
+        <Text style={styles.headerTitle}>myCucina</Text>
+        <Text style={styles.headerSubtitle}>Shopping List</Text>
+      </View>
+
+      <TouchableOpacity style={styles.addItemButton} onPress={() => setShowAddModal(true)}>
+        <Text style={styles.addItemButtonText}>+ Add Item</Text>
+        </TouchableOpacity> 
+
+      {shoppingList.length === 0 ? (
+        <View style={styles.placeholder}>
+          <Text style={styles.placeholderText}>🛒</Text>
+          <Text style={styles.placeholderLabel}>Your list is empty</Text>
+          <Text style={styles.placeholderSub}>Tap "Add to List" on any recipe or type above</Text>
+        </View>
+      ) : (
+        <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
+          {renderSection('Need to Buy', needToBuy, '#8E8E93')}
+          {renderSection('Running Low', runningLow, '#FF9500')}
+          {renderSection('Already Have', alreadyHave, '#34C759')}
+          {renderCheckedSection()}
+          <TouchableOpacity style={styles.clearButton} onPress={onClearList}>
+            <Text style={styles.clearButtonText}>Clear List</Text>
+          </TouchableOpacity>
+          <View style={{ height: 40 }} />
+        </ScrollView>
+      )}
+      <Modal visible={showAddModal} animationType="slide" presentationStyle="pageSheet">
+        <SafeAreaView style={styles.modalContainer}>
+          <View style={styles.modalHeader}>
+            <TouchableOpacity onPress={() => setShowAddModal(false)}>
+              <Text style={styles.modalCancel}>Cancel</Text>
+            </TouchableOpacity>
+            <Text style={styles.modalTitle}>Add Item</Text>
+            <TouchableOpacity onPress={handleManualAdd}>
+              <Text style={styles.modalDone}>Add</Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.addItemForm}>
+            <Text style={styles.inputLabel}>Item Name</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="e.g. Potatoes, Toilet Paper, Water"
+              placeholderTextColor="#C7C7CC"
+              value={manualName}
+              onChangeText={setManualName}
+              autoFocus
+            />
+
+            <Text style={styles.inputLabel}>Quantity (optional)</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="e.g. 5, 1, 2"
+              placeholderTextColor="#C7C7CC"
+              value={manualQty}
+              onChangeText={setManualQty}
+              keyboardType="decimal-pad"
+            />
+
+            <Text style={styles.inputLabel}>Unit (optional)</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="e.g. pack, case, bag, lbs, cups"
+              placeholderTextColor="#C7C7CC"
+              value={manualUnit}
+              onChangeText={setManualUnit}
+            />
+
+            <Text style={styles.inputLabel}>Category</Text>
+            <View style={styles.categoryGrid}>
+              {['Bakery','Beverages','Dairy','Deli','Frozen','Meat','Nuts & Dried Fruit','Other','Pantry','Produce'].map(cat => (
+                <TouchableOpacity
+                  key={cat}
+                  style={[styles.categoryChip, manualName && categorizeIngredient(manualName) === cat && styles.categoryChipActive]}
+                  onPress={() => {}}
+                >
+                  <Text style={[styles.categoryChipText, manualName && categorizeIngredient(manualName) === cat && styles.categoryChipTextActive]}>{cat}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <Text style={styles.inputHelper}>Category is auto-detected from the item name</Text>
+          </View>
+        </SafeAreaView>
+      </Modal>
+    </SafeAreaView>
+  );
+}
 
 // ── IMPORT RECIPE MODAL ────────────────────────────────────
 function ImportRecipeModal({ visible, onClose, onSave }) {
@@ -216,12 +670,7 @@ function ImportRecipeModal({ visible, onClose, onSave }) {
   const [parsed, setParsed] = useState(null);
   const [error, setError] = useState(null);
 
-  function reset() {
-    setStep('paste');
-    setRawText('');
-    setParsed(null);
-    setError(null);
-  }
+  function reset() { setStep('paste'); setRawText(''); setParsed(null); setError(null); }
 
   async function handleParse() {
     if (!rawText.trim()) return;
@@ -234,12 +683,8 @@ function ImportRecipeModal({ visible, onClose, onSave }) {
         body: JSON.stringify({ text: rawText }),
       });
       const data = await response.json();
-      if (data.success) {
-        setParsed(data.recipe);
-        setStep('review');
-      } else {
-        setError('Could not parse recipe. Try again.');
-      }
+      if (data.success) { setParsed(data.recipe); setStep('review'); }
+      else { setError('Could not parse recipe. Try again.'); }
     } catch (e) {
       setError('Connection error. Check your network.');
     } finally {
@@ -249,13 +694,7 @@ function ImportRecipeModal({ visible, onClose, onSave }) {
 
   function handleSave() {
     if (!parsed) return;
-    const recipe = {
-      ...parsed,
-      id: Date.now(),
-      keywords: [],
-      isImported: true,
-    };
-    onSave(recipe);
+    onSave({ ...parsed, id: Date.now(), keywords: [], isImported: true });
     reset();
     onClose();
   }
@@ -264,74 +703,41 @@ function ImportRecipeModal({ visible, onClose, onSave }) {
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet">
       <SafeAreaView style={styles.modalContainer}>
         <View style={styles.modalHeader}>
-          <TouchableOpacity onPress={() => { reset(); onClose(); }}>
-            <Text style={styles.modalCancel}>Cancel</Text>
-          </TouchableOpacity>
+          <TouchableOpacity onPress={() => { reset(); onClose(); }}><Text style={styles.modalCancel}>Cancel</Text></TouchableOpacity>
           <Text style={styles.modalTitle}>Import Recipe</Text>
-          {step === 'review' ? (
-            <TouchableOpacity onPress={handleSave}>
-              <Text style={styles.modalSave}>Save</Text>
-            </TouchableOpacity>
-          ) : (
-            <View style={{ width: 50 }} />
-          )}
+          {step === 'review' ? <TouchableOpacity onPress={handleSave}><Text style={styles.modalSave}>Save</Text></TouchableOpacity> : <View style={{ width: 50 }} />}
         </View>
-
         {step === 'paste' && (
           <ScrollView style={styles.modalBody}>
             <Text style={styles.inputLabel}>Paste Recipe Text</Text>
-            <Text style={styles.importHint}>
-              Copy the full recipe text from any website and paste it below. myCucina will extract and normalize the ingredients automatically.
-            </Text>
-            <TextInput
-              style={[styles.textInput, { height: 300, textAlignVertical: 'top', paddingTop: 14 }]}
-              placeholder="Paste recipe text here..."
-              value={rawText}
-              onChangeText={setRawText}
-              multiline
-              autoFocus
-            />
+            <Text style={styles.importHint}>Copy the full recipe text from any website and paste it below.</Text>
+            <TextInput style={[styles.textInput, { height: 300, textAlignVertical: 'top', paddingTop: 14 }]} placeholder="Paste recipe text here..." value={rawText} onChangeText={setRawText} multiline autoFocus />
             {error && <Text style={styles.errorText}>{error}</Text>}
-            <TouchableOpacity
-              style={[styles.addButton, (!rawText.trim() || loading) && { backgroundColor: '#C7C7CC' }]}
-              onPress={handleParse}
-              disabled={!rawText.trim() || loading}
-            >
+            <TouchableOpacity style={[styles.addButton, (!rawText.trim() || loading) && { backgroundColor: '#C7C7CC' }]} onPress={handleParse} disabled={!rawText.trim() || loading}>
               {loading ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.addButtonText}>Parse Recipe</Text>}
             </TouchableOpacity>
           </ScrollView>
         )}
-
         {step === 'review' && parsed && (
           <ScrollView style={styles.modalBody}>
             <Text style={styles.importHint}>Review the parsed recipe before saving.</Text>
-
             <Text style={styles.inputLabel}>Name</Text>
-            <View style={styles.reviewBox}>
-              <Text style={styles.reviewText}>{parsed.name}</Text>
-            </View>
-
+            <View style={styles.reviewBox}><Text style={styles.reviewText}>{parsed.name}</Text></View>
             <Text style={styles.inputLabel}>Details</Text>
-            <View style={styles.reviewBox}>
-              <Text style={styles.reviewText}>⏱ {parsed.time} · {parsed.difficulty}</Text>
-            </View>
-
+            <View style={styles.reviewBox}><Text style={styles.reviewText}>⏱ {parsed.time} · {parsed.difficulty}</Text></View>
             <Text style={styles.inputLabel}>Ingredients ({parsed.ingredients?.length})</Text>
             <View style={styles.card}>
               {parsed.ingredients?.map((ing, i) => (
-                <View key={i} style={[styles.ingredientRow, i < parsed.ingredients.length - 1 && styles.ingredientBorder]}>
-                 <IngredientRow ing={ing} />        
+                <View key={i} style={[styles.ingRow, i < parsed.ingredients.length - 1 && styles.ingredientBorder]}>
+                  <IngredientRow ing={ing} />
                 </View>
               ))}
             </View>
-
             <Text style={styles.inputLabel}>Steps ({parsed.steps?.length})</Text>
             <View style={styles.card}>
               {parsed.steps?.map((step, i) => (
                 <View key={i} style={[styles.stepRow, i < parsed.steps.length - 1 && styles.ingredientBorder]}>
-                  <View style={styles.stepNumber}>
-                    <Text style={styles.stepNumberText}>{i + 1}</Text>
-                  </View>
+                  <View style={styles.stepNumber}><Text style={styles.stepNumberText}>{i + 1}</Text></View>
                   <Text style={styles.stepText}>{step}</Text>
                 </View>
               ))}
@@ -344,17 +750,90 @@ function ImportRecipeModal({ visible, onClose, onSave }) {
   );
 }
 
+// ── TONIGHT MODAL ──────────────────────────────────────────
+function TonightModal({ visible, onClose, inventory }) {
+  const [loading, setLoading] = useState(false);
+  const [suggestions, setSuggestions] = useState(null);
+  const [error, setError] = useState(null);
+
+  async function handleAsk() {
+    setLoading(true);
+    setError(null);
+    setSuggestions(null);
+    try {
+      const itemList = inventory.map(item => ({ name: item.name, daysLeft: Math.max(0, getDaysUntilExpiry(item.expiryDate)) }));
+      const response = await fetch(`${PI_SERVER}/suggest`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ inventory: itemList }),
+      });
+      const data = await response.json();
+      setSuggestions(data.suggestions);
+    } catch (e) {
+      setError(`Error: ${e.message}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet">
+      <SafeAreaView style={styles.modalContainer}>
+        <View style={styles.modalHeader}>
+          <TouchableOpacity onPress={onClose}><Text style={styles.modalCancel}>Close</Text></TouchableOpacity>
+          <Text style={styles.modalTitle}>Tonight</Text>
+          <View style={{ width: 50 }} />
+        </View>
+        <ScrollView style={styles.modalBody}>
+          <View style={styles.tonightHero}>
+            <Text style={styles.tonightEmoji}>🍽</Text>
+            <Text style={styles.tonightHeroTitle}>What can I make tonight?</Text>
+            <Text style={styles.tonightHeroSub}>We'll look at what's in your kitchen and find the best options before anything goes to waste.</Text>
+            <TouchableOpacity style={[styles.tonightButton, loading && styles.tonightButtonDisabled]} onPress={handleAsk} disabled={loading}>
+              {loading ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.tonightButtonText}>{suggestions ? 'Refresh suggestions' : 'Show me what I can make'}</Text>}
+            </TouchableOpacity>
+          </View>
+          {error && <View style={styles.errorBox}><Text style={styles.errorText}>{error}</Text></View>}
+          {suggestions && (
+            <View>
+              <Text style={styles.sectionHeader}>Based on your kitchen right now</Text>
+              {suggestions.map((s, i) => (
+                <View key={i} style={styles.suggestionCard}>
+                  <View style={styles.suggestionCardTop}>
+                    <Text style={styles.suggestionCardName}>{s.name}</Text>
+                    <View style={styles.suggestionCardMeta}>
+                      <Text style={styles.recipeCardMeta}>⏱ {s.time}</Text>
+                      <Text style={[styles.recipeCardMeta, { color: DIFFICULTY_COLORS[s.difficulty] || '#8E8E93' }]}>● {s.difficulty}</Text>
+                    </View>
+                  </View>
+                  <Text style={styles.suggestionReason}>{s.reason}</Text>
+                </View>
+              ))}
+            </View>
+          )}
+          <View style={{ height: 40 }} />
+        </ScrollView>
+      </SafeAreaView>
+    </Modal>
+  );
+}
+
 // ── RECIPE DETAIL SCREEN ───────────────────────────────────
-function RecipeDetailScreen({ route, navigation, favorites, onToggleFavorite }) {
+function RecipeDetailScreen({ route, navigation, favorites, onToggleFavorite, onAddToList }) {
   const { recipe } = route.params;
   const isFavorited = favorites.includes(recipe.id);
+  const [added, setAdded] = useState(false);
+
+  function handleAddToList() {
+    onAddToList(recipe);
+    setAdded(true);
+    setTimeout(() => setAdded(false), 2000);
+  }
 
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Text style={styles.backButton}>‹ Back</Text>
-        </TouchableOpacity>
+        <TouchableOpacity onPress={() => navigation.goBack()}><Text style={styles.backButton}>‹ Back</Text></TouchableOpacity>
         <Text style={styles.headerTitle}>myCucina</Text>
         <TouchableOpacity onPress={() => onToggleFavorite(recipe.id)}>
           <Text style={{ fontSize: 24 }}>{isFavorited ? '⭐️' : '☆'}</Text>
@@ -368,11 +847,14 @@ function RecipeDetailScreen({ route, navigation, favorites, onToggleFavorite }) 
             <Text style={[styles.recipeMetaText, { color: DIFFICULTY_COLORS[recipe.difficulty] }]}>● {recipe.difficulty}</Text>
           </View>
           {recipe.isImported && <Text style={[styles.recipeMetaText, { marginTop: 4, color: '#007AFF' }]}>Imported recipe</Text>}
+          <TouchableOpacity style={[styles.addToListButton, added && styles.addToListButtonDone]} onPress={handleAddToList}>
+            <Text style={styles.addToListButtonText}>{added ? '✓ Added to List' : '+ Add to Shopping List'}</Text>
+          </TouchableOpacity>
         </View>
         <Text style={styles.sectionHeader}>Ingredients</Text>
         <View style={styles.card}>
           {recipe.ingredients?.map((ing, i) => (
-            <View key={i} style={[styles.ingredientRow, i < recipe.ingredients.length - 1 && styles.ingredientBorder]}>
+            <View key={i} style={[{ paddingVertical: 4 }, i < recipe.ingredients.length - 1 && styles.ingredientBorder]}>
               <IngredientRow ing={ing} />
             </View>
           ))}
@@ -393,7 +875,7 @@ function RecipeDetailScreen({ route, navigation, favorites, onToggleFavorite }) 
 }
 
 // ── ITEM SUGGESTIONS SCREEN ────────────────────────────────
-function SuggestionsScreen({ route, navigation, favorites, onToggleFavorite, allRecipes }) {
+function SuggestionsScreen({ route, navigation, favorites, onToggleFavorite, allRecipes, onAddToList }) {
   const { item } = route.params;
   const days = getDaysUntilExpiry(item.expiryDate);
   const color = getUrgencyColor(days);
@@ -402,18 +884,14 @@ function SuggestionsScreen({ route, navigation, favorites, onToggleFavorite, all
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Text style={styles.backButton}>‹ Back</Text>
-        </TouchableOpacity>
+        <TouchableOpacity onPress={() => navigation.goBack()}><Text style={styles.backButton}>‹ Back</Text></TouchableOpacity>
         <Text style={styles.headerTitle}>myCucina</Text>
         <View style={{ width: 40 }} />
       </View>
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
         <View style={styles.suggestionHero}>
           <View style={[styles.urgencyBadge, { backgroundColor: color }]}>
-            <Text style={styles.urgencyBadgeText}>
-              {days <= 0 ? 'Expired' : days === 1 ? '1 day left' : `${days} days left`}
-            </Text>
+            <Text style={styles.urgencyBadgeText}>{days <= 0 ? 'Expired' : days === 1 ? '1 day left' : `${days} days left`}</Text>
           </View>
           <Text style={styles.suggestionItemName}>{item.name}</Text>
           <Text style={styles.suggestionSubtitle}>Use it in one of these recipes</Text>
@@ -445,14 +923,12 @@ function SuggestionsScreen({ route, navigation, favorites, onToggleFavorite, all
 }
 
 // ── RECIPE LIST SCREEN ─────────────────────────────────────
-function RecipeListScreen({ navigation, favorites, onToggleFavorite, allRecipes, onImportSave }) {
+function RecipeListScreen({ navigation, favorites, onToggleFavorite, allRecipes, onImportSave, inventory }) {
   const [search, setSearch] = useState('');
   const [importVisible, setImportVisible] = useState(false);
+  const [tonightVisible, setTonightVisible] = useState(false);
 
-  const filtered = allRecipes.filter(r =>
-    r.name.toLowerCase().includes(search.toLowerCase())
-  );
-
+  const filtered = allRecipes.filter(r => r.name.toLowerCase().includes(search.toLowerCase()));
   const sections = [
     { title: 'Easy', data: filtered.filter(r => r.difficulty === 'Easy') },
     { title: 'Medium', data: filtered.filter(r => r.difficulty === 'Medium') },
@@ -466,18 +942,17 @@ function RecipeListScreen({ navigation, favorites, onToggleFavorite, allRecipes,
         <Text style={styles.headerSubtitle}>Recipes</Text>
       </View>
       <View style={styles.searchContainer}>
-        <TextInput
-          style={styles.searchInput}
-          placeholder="🔍  Search recipes..."
-          value={search}
-          onChangeText={setSearch}
-          clearButtonMode="while-editing"
-        />
+        <TextInput style={styles.searchInput} placeholder="🔍  Search recipes..." value={search} onChangeText={setSearch} clearButtonMode="while-editing" />
       </View>
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
-        <TouchableOpacity style={styles.importButton} onPress={() => setImportVisible(true)}>
-          <Text style={styles.importButtonText}>+ Import Recipe</Text>
-        </TouchableOpacity>
+        <View style={styles.recipeActions}>
+          <TouchableOpacity style={styles.actionButton} onPress={() => setTonightVisible(true)}>
+            <Text style={styles.actionButtonText}>🍽 What can I make tonight?</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.actionButton, styles.actionButtonSecondary]} onPress={() => setImportVisible(true)}>
+            <Text style={[styles.actionButtonText, styles.actionButtonTextSecondary]}>+ Import Recipe</Text>
+          </TouchableOpacity>
+        </View>
 
         {filtered.length === 0 ? (
           <View style={styles.placeholder}>
@@ -507,17 +982,14 @@ function RecipeListScreen({ navigation, favorites, onToggleFavorite, allRecipes,
         <View style={{ height: 40 }} />
       </ScrollView>
 
-      <ImportRecipeModal
-        visible={importVisible}
-        onClose={() => setImportVisible(false)}
-        onSave={onImportSave}
-      />
+      <ImportRecipeModal visible={importVisible} onClose={() => setImportVisible(false)} onSave={onImportSave} />
+      <TonightModal visible={tonightVisible} onClose={() => setTonightVisible(false)} inventory={inventory} />
     </SafeAreaView>
   );
 }
 
 // ── FAVORITES SCREEN ───────────────────────────────────────
-function FavoritesScreen({ navigation, favorites, onToggleFavorite, allRecipes }) {
+function FavoritesScreen({ navigation, favorites, onToggleFavorite, allRecipes, onAddToList }) {
   const favoriteRecipes = allRecipes.filter(r => favorites.includes(r.id));
   return (
     <SafeAreaView style={styles.container}>
@@ -562,15 +1034,8 @@ function ItemModal({ visible, item, onSave, onDelete, onClose }) {
   const [days, setDays] = useState('7');
 
   useEffect(() => {
-    if (item) {
-      setName(item.name);
-      setCategory(item.category);
-      setDays(String(Math.max(0, getDaysUntilExpiry(item.expiryDate))));
-    } else {
-      setName('');
-      setCategory('Produce');
-      setDays('7');
-    }
+    if (item) { setName(item.name); setCategory(item.category); setDays(String(Math.max(0, getDaysUntilExpiry(item.expiryDate)))); }
+    else { setName(''); setCategory('Produce'); setDays('7'); }
   }, [item]);
 
   function handleSave() {
@@ -634,9 +1099,7 @@ function UseSoonScreen({ inventory, navigation }) {
               </View>
               <View style={styles.itemRight}>
                 <Text style={styles.expiryDate}>{formatExpiryDate(item.expiryDate)}</Text>
-                <Text style={[styles.daysLeft, { color }]}>
-                  {days <= 0 ? 'Expired' : days === 1 ? '1 day left' : `${days} days left`}
-                </Text>
+                <Text style={[styles.daysLeft, { color }]}>{days <= 0 ? 'Expired' : days === 1 ? '1 day left' : `${days} days left`}</Text>
               </View>
             </TouchableOpacity>
           );
@@ -683,9 +1146,7 @@ function InventoryScreen({ inventory, onAdd, onEdit, onDelete }) {
                   <View style={[styles.dot, { backgroundColor: color }]} />
                   <View style={styles.itemInfo}>
                     <Text style={styles.itemName}>{item.name}</Text>
-                    <Text style={[styles.itemCategory, { color }]}>
-                      {days <= 0 ? 'Expired' : days === 1 ? '1 day left' : `${days} days left`}
-                    </Text>
+                    <Text style={[styles.itemCategory, { color }]}>{days <= 0 ? 'Expired' : days === 1 ? '1 day left' : `${days} days left`}</Text>
                   </View>
                   <Text style={styles.chevron}>›</Text>
                 </TouchableOpacity>
@@ -703,124 +1164,34 @@ function InventoryScreen({ inventory, onAdd, onEdit, onDelete }) {
   );
 }
 
-// ── TONIGHT SCREEN ─────────────────────────────────────────
-function TonightScreen({ inventory }) {
-  const [loading, setLoading] = useState(false);
-  const [suggestions, setSuggestions] = useState(null);
-  const [error, setError] = useState(null);
-
-  async function handleAsk() {
-    setLoading(true);
-    setError(null);
-    setSuggestions(null);
-    try {
-      const itemList = inventory.map(item => ({ name: item.name, daysLeft: Math.max(0, getDaysUntilExpiry(item.expiryDate)) }));
-      const response = await fetch(`${PI_SERVER}/suggest`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ inventory: itemList }),
-      });
-      const data = await response.json();
-      setSuggestions(data.suggestions);
-    } catch (e) {
-      setError(e.message || 'Something went wrong. Please try again.');
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  return (
-    <SafeAreaView style={styles.container}>
-      <View style={[styles.header, { flexDirection: 'column', alignItems: 'flex-start' }]}>
-        <Text style={styles.headerTitle}>myCucina</Text>
-        <Text style={styles.headerSubtitle}>Tonight</Text>
-      </View>
-      <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
-        <View style={styles.tonightHero}>
-          <Text style={styles.tonightEmoji}>🍽</Text>
-          <Text style={styles.tonightHeroTitle}>What can I make tonight?</Text>
-          <Text style={styles.tonightHeroSub}>We'll look at what's in your kitchen and find the best options before anything goes to waste.</Text>
-          <TouchableOpacity style={[styles.tonightButton, loading && styles.tonightButtonDisabled]} onPress={handleAsk} disabled={loading}>
-            {loading ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.tonightButtonText}>{suggestions ? 'Refresh suggestions' : 'Show me what I can make'}</Text>}
-          </TouchableOpacity>
-        </View>
-        {error && <View style={styles.errorBox}><Text style={styles.errorText}>{error}</Text></View>}
-        {suggestions && (
-          <View>
-            <Text style={styles.sectionHeader}>Based on your kitchen right now</Text>
-            {suggestions.map((s, i) => (
-              <View key={i} style={styles.suggestionCard}>
-                <View style={styles.suggestionCardTop}>
-                  <Text style={styles.suggestionCardName}>{s.name}</Text>
-                  <View style={styles.suggestionCardMeta}>
-                    <Text style={styles.recipeCardMeta}>⏱ {s.time}</Text>
-                    <Text style={[styles.recipeCardMeta, { color: DIFFICULTY_COLORS[s.difficulty] || '#8E8E93' }]}>● {s.difficulty}</Text>
-                  </View>
-                </View>
-                <Text style={styles.suggestionReason}>{s.reason}</Text>
-              </View>
-            ))}
-          </View>
-        )}
-        <View style={{ height: 40 }} />
-      </ScrollView>
-    </SafeAreaView>
-  );
-}
-
-// ── SCAN SCREEN ────────────────────────────────────────────
-function ScanScreen() {
-  return (
-    <SafeAreaView style={styles.container}>
-      <View style={[styles.header, { flexDirection: 'column', alignItems: 'flex-start' }]}>
-        <Text style={styles.headerTitle}>myCucina</Text>
-        <Text style={styles.headerSubtitle}>Scan Receipt</Text>
-      </View>
-      <View style={styles.placeholder}>
-        <Text style={styles.placeholderText}>📷</Text>
-        <Text style={styles.placeholderLabel}>Receipt scanner lives here</Text>
-        <Text style={styles.placeholderSub}>Coming soon</Text>
-      </View>
-    </SafeAreaView>
-  );
-}
-
 // ── NAVIGATION ─────────────────────────────────────────────
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
 
-function UseSoonStack({ inventory, favorites, onToggleFavorite, allRecipes }) {
+function UseSoonStack({ inventory, favorites, onToggleFavorite, allRecipes, onAddToList }) {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
       <Stack.Screen name="UseSoonMain">{({ navigation }) => <UseSoonScreen inventory={inventory} navigation={navigation} />}</Stack.Screen>
-      <Stack.Screen name="Suggestions">{({ route, navigation }) => <SuggestionsScreen route={route} navigation={navigation} favorites={favorites} onToggleFavorite={onToggleFavorite} allRecipes={allRecipes} />}</Stack.Screen>
-      <Stack.Screen name="RecipeDetail">{({ route, navigation }) => <RecipeDetailScreen route={route} navigation={navigation} favorites={favorites} onToggleFavorite={onToggleFavorite} />}</Stack.Screen>
+      <Stack.Screen name="Suggestions">{({ route, navigation }) => <SuggestionsScreen route={route} navigation={navigation} favorites={favorites} onToggleFavorite={onToggleFavorite} allRecipes={allRecipes} onAddToList={onAddToList} />}</Stack.Screen>
+      <Stack.Screen name="RecipeDetail">{({ route, navigation }) => <RecipeDetailScreen route={route} navigation={navigation} favorites={favorites} onToggleFavorite={onToggleFavorite} onAddToList={onAddToList} />}</Stack.Screen>
     </Stack.Navigator>
   );
 }
 
-function RecipesStack({ favorites, onToggleFavorite, allRecipes, onImportSave }) {
+function RecipesStack({ favorites, onToggleFavorite, allRecipes, onImportSave, onAddToList, inventory }) {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
-      <Stack.Screen name="RecipeListMain">{({ navigation }) => <RecipeListScreen navigation={navigation} favorites={favorites} onToggleFavorite={onToggleFavorite} allRecipes={allRecipes} onImportSave={onImportSave} />}</Stack.Screen>
-      <Stack.Screen name="RecipeDetail">{({ route, navigation }) => <RecipeDetailScreen route={route} navigation={navigation} favorites={favorites} onToggleFavorite={onToggleFavorite} />}</Stack.Screen>
+      <Stack.Screen name="RecipeListMain">{({ navigation }) => <RecipeListScreen navigation={navigation} favorites={favorites} onToggleFavorite={onToggleFavorite} allRecipes={allRecipes} onImportSave={onImportSave} inventory={inventory} />}</Stack.Screen>
+      <Stack.Screen name="RecipeDetail">{({ route, navigation }) => <RecipeDetailScreen route={route} navigation={navigation} favorites={favorites} onToggleFavorite={onToggleFavorite} onAddToList={onAddToList} />}</Stack.Screen>
     </Stack.Navigator>
   );
 }
 
-function FavoritesStack({ favorites, onToggleFavorite, allRecipes }) {
+function FavoritesStack({ favorites, onToggleFavorite, allRecipes, onAddToList }) {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
-      <Stack.Screen name="FavoritesMain">{({ navigation }) => <FavoritesScreen navigation={navigation} favorites={favorites} onToggleFavorite={onToggleFavorite} allRecipes={allRecipes} />}</Stack.Screen>
-      <Stack.Screen name="FavRecipeDetail">{({ route, navigation }) => <RecipeDetailScreen route={route} navigation={navigation} favorites={favorites} onToggleFavorite={onToggleFavorite} />}</Stack.Screen>
-    </Stack.Navigator>
-  );
-}
-
-function TonightStack({ inventory }) {
-  return (
-    <Stack.Navigator screenOptions={{ headerShown: false }}>
-      <Stack.Screen name="TonightMain">{({ navigation }) => <TonightScreen inventory={inventory} navigation={navigation} />}</Stack.Screen>
+      <Stack.Screen name="FavoritesMain">{({ navigation }) => <FavoritesScreen navigation={navigation} favorites={favorites} onToggleFavorite={onToggleFavorite} allRecipes={allRecipes} onAddToList={onAddToList} />}</Stack.Screen>
+      <Stack.Screen name="FavRecipeDetail">{({ route, navigation }) => <RecipeDetailScreen route={route} navigation={navigation} favorites={favorites} onToggleFavorite={onToggleFavorite} onAddToList={onAddToList} />}</Stack.Screen>
     </Stack.Navigator>
   );
 }
@@ -829,6 +1200,7 @@ export default function App() {
   const [inventory, setInventory] = useState([]);
   const [favorites, setFavorites] = useState([]);
   const [customRecipes, setCustomRecipes] = useState([]);
+  const [shoppingList, setShoppingList] = useState([]);
   const [loaded, setLoaded] = useState(false);
 
   const allRecipes = [...BUILTIN_RECIPES, ...customRecipes];
@@ -836,18 +1208,21 @@ export default function App() {
   useEffect(() => {
     async function loadData() {
       try {
-        const [storedInventory, storedFavorites, storedCustom] = await Promise.all([
+        const [storedInventory, storedFavorites, storedCustom, storedShopping] = await Promise.all([
           AsyncStorage.getItem(STORAGE_KEY),
           AsyncStorage.getItem(FAVORITES_KEY),
           AsyncStorage.getItem(CUSTOM_RECIPES_KEY),
+          AsyncStorage.getItem(SHOPPING_LIST_KEY),
         ]);
         setInventory(storedInventory ? JSON.parse(storedInventory) : INITIAL_INVENTORY);
         setFavorites(storedFavorites ? JSON.parse(storedFavorites) : []);
         setCustomRecipes(storedCustom ? JSON.parse(storedCustom) : []);
+        setShoppingList(storedShopping ? JSON.parse(storedShopping) : []);
       } catch (e) {
         setInventory(INITIAL_INVENTORY);
         setFavorites([]);
         setCustomRecipes([]);
+        setShoppingList([]);
       } finally {
         setLoaded(true);
       }
@@ -858,12 +1233,16 @@ export default function App() {
   useEffect(() => { if (loaded) AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(inventory)); }, [inventory, loaded]);
   useEffect(() => { if (loaded) AsyncStorage.setItem(FAVORITES_KEY, JSON.stringify(favorites)); }, [favorites, loaded]);
   useEffect(() => { if (loaded) AsyncStorage.setItem(CUSTOM_RECIPES_KEY, JSON.stringify(customRecipes)); }, [customRecipes, loaded]);
+  useEffect(() => { if (loaded) AsyncStorage.setItem(SHOPPING_LIST_KEY, JSON.stringify(shoppingList)); }, [shoppingList, loaded]);
 
   function handleAdd(item) { setInventory(prev => [...prev, { ...item, id: Date.now() }]); }
   function handleEdit(updated) { setInventory(prev => prev.map(i => i.id === updated.id ? updated : i)); }
   function handleDelete(id) { setInventory(prev => prev.filter(i => i.id !== id)); }
   function handleToggleFavorite(recipeId) { setFavorites(prev => prev.includes(recipeId) ? prev.filter(id => id !== recipeId) : [...prev, recipeId]); }
   function handleImportSave(recipe) { setCustomRecipes(prev => [...prev, recipe]); }
+  function handleAddToList(recipe) { setShoppingList(prev => addRecipeToShoppingList(recipe, prev)); }
+  function handleToggleShoppingItem(id) { setShoppingList(prev => prev.map(i => i.id === id ? { ...i, checked: !i.checked } : i)); }
+  function handleClearList() { setShoppingList([]); }
 
   if (!loaded) {
     return <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}><ActivityIndicator size="large" color="#007AFF" /></View>;
@@ -873,11 +1252,33 @@ export default function App() {
     <NavigationContainer>
       <StatusBar style="dark" />
       <Tab.Navigator screenOptions={{ headerShown: false, tabBarActiveTintColor: '#007AFF', tabBarInactiveTintColor: '#8E8E93', tabBarStyle: { backgroundColor: '#FFFFFF', borderTopColor: '#E5E5EA' } }}>
-        <Tab.Screen name="Tonight" options={{ tabBarIcon: () => <Text style={{ fontSize: 20 }}>🍽</Text> }}>{() => <TonightStack inventory={inventory} />}</Tab.Screen>
-        <Tab.Screen name="Use Soon" options={{ tabBarIcon: () => <Text style={{ fontSize: 20 }}>⚠️</Text> }}>{() => <UseSoonStack inventory={inventory} favorites={favorites} onToggleFavorite={handleToggleFavorite} allRecipes={allRecipes} />}</Tab.Screen>
-        <Tab.Screen name="Inventory" options={{ tabBarIcon: () => <Text style={{ fontSize: 20 }}>🥦</Text> }}>{() => <InventoryScreen inventory={inventory} onAdd={handleAdd} onEdit={handleEdit} onDelete={handleDelete} />}</Tab.Screen>
-        <Tab.Screen name="Recipes" options={{ tabBarIcon: () => <Text style={{ fontSize: 20 }}>🍳</Text> }}>{() => <RecipesStack favorites={favorites} onToggleFavorite={handleToggleFavorite} allRecipes={allRecipes} onImportSave={handleImportSave} />}</Tab.Screen>
-        <Tab.Screen name="Favorites" options={{ tabBarIcon: () => <Text style={{ fontSize: 20 }}>⭐️</Text> }}>{() => <FavoritesStack favorites={favorites} onToggleFavorite={handleToggleFavorite} allRecipes={allRecipes} />}</Tab.Screen>
+
+        <Tab.Screen name="Shopping" options={{ tabBarIcon: () => <Text style={{ fontSize: 20 }}>🛒</Text> }}>
+          {() => <ShoppingListScreen shoppingList={shoppingList} inventory={inventory} onToggleItem={handleToggleShoppingItem} onClearList={handleClearList} onAddManualItem={(name, quantity, unit) => {
+            const category = categorizeIngredient(name);
+                setShoppingList(prev => [...prev, {
+                  id: Date.now().toString(),
+                  name,
+                  quantity: quantity || null,
+                  unit: unit || null,
+                  recipes: ['Manual'],
+                  checked: false,
+                  category,
+                }]);
+          }} />}
+        </Tab.Screen>
+        <Tab.Screen name="Use Soon" options={{ tabBarIcon: () => <Text style={{ fontSize: 20 }}>⚠️</Text> }}>
+          {() => <UseSoonStack inventory={inventory} favorites={favorites} onToggleFavorite={handleToggleFavorite} allRecipes={allRecipes} onAddToList={handleAddToList} />}
+        </Tab.Screen>
+        <Tab.Screen name="Inventory" options={{ tabBarIcon: () => <Text style={{ fontSize: 20 }}>🥦</Text> }}>
+          {() => <InventoryScreen inventory={inventory} onAdd={handleAdd} onEdit={handleEdit} onDelete={handleDelete} />}
+        </Tab.Screen>
+        <Tab.Screen name="Recipes" options={{ tabBarIcon: () => <Text style={{ fontSize: 20 }}>🍳</Text> }}>
+          {() => <RecipesStack favorites={favorites} onToggleFavorite={handleToggleFavorite} allRecipes={allRecipes} onImportSave={handleImportSave} onAddToList={handleAddToList} inventory={inventory} />}
+        </Tab.Screen>
+        <Tab.Screen name="Favorites" options={{ tabBarIcon: () => <Text style={{ fontSize: 20 }}>⭐️</Text> }}>
+          {() => <FavoritesStack favorites={favorites} onToggleFavorite={handleToggleFavorite} allRecipes={allRecipes} onAddToList={handleAddToList} />}
+        </Tab.Screen>
       </Tab.Navigator>
     </NavigationContainer>
   );
@@ -904,8 +1305,11 @@ const styles = StyleSheet.create({
   chevron: { fontSize: 20, color: '#C7C7CC', marginLeft: 8 },
   fab: { position: 'absolute', bottom: 24, right: 24, backgroundColor: '#007AFF', paddingHorizontal: 20, paddingVertical: 14, borderRadius: 30, shadowColor: '#007AFF', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8 },
   fabText: { color: '#FFFFFF', fontWeight: '700', fontSize: 16 },
-  importButton: { marginHorizontal: 16, marginBottom: 8, backgroundColor: '#F0F7FF', borderRadius: 12, paddingVertical: 14, alignItems: 'center', borderWidth: 1, borderColor: '#007AFF' },
-  importButtonText: { color: '#007AFF', fontWeight: '600', fontSize: 16 },
+  recipeActions: { marginHorizontal: 16, marginBottom: 8, gap: 8 },
+  actionButton: { backgroundColor: '#007AFF', borderRadius: 12, paddingVertical: 14, alignItems: 'center' },
+  actionButtonSecondary: { backgroundColor: '#F0F7FF', borderWidth: 1, borderColor: '#007AFF' },
+  actionButtonText: { color: '#FFFFFF', fontWeight: '600', fontSize: 16 },
+  actionButtonTextSecondary: { color: '#007AFF' },
   modalContainer: { flex: 1, backgroundColor: '#F2F2F7' },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#FFFFFF', paddingHorizontal: 20, paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: '#E5E5EA' },
   modalTitle: { fontSize: 18, fontWeight: '700', color: '#1C1C1E' },
@@ -924,6 +1328,9 @@ const styles = StyleSheet.create({
   deleteButtonText: { color: '#FF3B30', fontSize: 16, fontWeight: '600' },
   addButton: { backgroundColor: '#007AFF', borderRadius: 12, paddingVertical: 16, alignItems: 'center', marginTop: 32 },
   addButtonText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
+  addToListButton: { marginTop: 14, backgroundColor: '#007AFF', borderRadius: 10, paddingVertical: 12, paddingHorizontal: 20, alignItems: 'center' },
+  addToListButtonDone: { backgroundColor: '#34C759' },
+  addToListButtonText: { color: '#FFFFFF', fontWeight: '600', fontSize: 15 },
   reviewBox: { backgroundColor: '#FFFFFF', borderRadius: 10, paddingHorizontal: 16, paddingVertical: 14, marginBottom: 4 },
   reviewText: { fontSize: 16, color: '#1C1C1E' },
   errorText: { color: '#FF3B30', fontSize: 14, marginTop: 12, textAlign: 'center' },
@@ -950,11 +1357,14 @@ const styles = StyleSheet.create({
   ingredientBorder: { borderBottomWidth: 1, borderBottomColor: '#F2F2F7' },
   ingredientDot: { fontSize: 16, color: '#007AFF', marginRight: 10, marginTop: 1 },
   ingredientText: { fontSize: 15, color: '#1C1C1E', flex: 1 },
+  ingRow: { flexDirection: 'row', alignItems: 'flex-start', paddingHorizontal: 16, paddingVertical: 10 },
+  ingQty: { fontSize: 14, color: '#8E8E93', width: 80, textAlign: 'left', marginRight: 16, paddingTop: 1 },
+  ingName: { fontSize: 15, color: '#1C1C1E', flex: 1 },
   stepRow: { flexDirection: 'row', paddingHorizontal: 16, paddingVertical: 14, alignItems: 'flex-start' },
   stepNumber: { width: 24, height: 24, borderRadius: 12, backgroundColor: '#007AFF', alignItems: 'center', justifyContent: 'center', marginRight: 12, marginTop: 1, flexShrink: 0 },
   stepNumberText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' },
   stepText: { fontSize: 15, color: '#1C1C1E', flex: 1, lineHeight: 22 },
-  tonightHero: { backgroundColor: '#FFFFFF', marginHorizontal: 16, marginTop: 12, borderRadius: 16, padding: 24, alignItems: 'center', marginBottom: 8 },
+  tonightHero: { backgroundColor: '#FFFFFF', borderRadius: 16, padding: 24, alignItems: 'center', marginBottom: 8 },
   tonightEmoji: { fontSize: 48, marginBottom: 12 },
   tonightHeroTitle: { fontSize: 20, fontWeight: '700', color: '#1C1C1E', textAlign: 'center', marginBottom: 8 },
   tonightHeroSub: { fontSize: 14, color: '#8E8E93', textAlign: 'center', lineHeight: 20, marginBottom: 20 },
@@ -967,7 +1377,21 @@ const styles = StyleSheet.create({
   suggestionCardMeta: { flexDirection: 'row', gap: 12 },
   suggestionReason: { fontSize: 14, color: '#8E8E93', lineHeight: 20 },
   errorBox: { backgroundColor: '#FFF2F2', marginHorizontal: 16, borderRadius: 12, padding: 16, borderWidth: 1, borderColor: '#FFD0D0' },
-  ingRow: { flexDirection: 'row', alignItems: 'flex-start', paddingHorizontal: 16, paddingVertical: 12 },
-  ingQty: { fontSize: 14, color: '#8E8E93', width: 80, textAlign: 'left', marginRight: 16, paddingTop: 1 },
-  ingName: { fontSize: 15, color: '#1C1C1E', flex: 1 },
-});
+  shopRow: { backgroundColor: '#FFFFFF', flexDirection: 'row', alignItems: 'flex-start', paddingHorizontal: 16, paddingVertical: 14, marginHorizontal: 16, marginBottom: 8, borderRadius: 12, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 4 },
+  shopRowChecked: { opacity: 0.5 },
+  shopCheck: { width: 24, height: 24, borderRadius: 12, borderWidth: 2, borderColor: '#C7C7CC', marginRight: 14, marginTop: 1, alignItems: 'center', justifyContent: 'center' },
+  shopCheckDone: { backgroundColor: '#34C759', borderColor: '#34C759' },
+  shopCheckMark: { color: '#FFFFFF', fontSize: 13, fontWeight: '700' },
+  shopInfo: { flex: 1 },
+  shopNameRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  shopQty: { fontSize: 14, color: '#8E8E93', fontWeight: '400' }, 
+  shopName: { fontSize: 16, fontWeight: '500', color: '#1C1C1E' },
+  shopNameChecked: { textDecorationLine: 'line-through', color: '#711c1c' },
+  shopRecipe: { fontSize: 13, color: '#8E8E93', marginTop: 2 },
+  shopInventoryNote: { fontSize: 12, marginTop: 3, fontWeight: '500' },
+  clearButton: { marginHorizontal: 16, marginTop: 8, backgroundColor: '#FFF2F2', borderRadius: 12, paddingVertical: 14, alignItems: 'center', borderWidth: 1, borderColor: '#FFD0D0' },
+  clearButtonText: { color: '#FF3B30', fontWeight: '600', fontSize: 15 },
+  addItemButton: { marginHorizontal: 16, marginVertical: 8, backgroundColor: '#F2F2F7', borderRadius: 14, paddingVertical: 14, alignItems: 'center', borderWidth: 1.5, borderColor: '#007AFF' },
+  addItemButtonText: { color: '#007AFF', fontWeight: '600', fontSize: 16 },
+  addItemForm: { paddingHorizontal: 16, paddingTop: 16 }, 
+})
