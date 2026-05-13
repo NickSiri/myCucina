@@ -678,11 +678,15 @@ function ImportRecipeModal({ visible, onClose, onSave }) {
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch(`${PI_SERVER}/parse-recipe`, {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 30000);
+      const response = await fetch(`${PI_SERVER}/scan-receipt`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: rawText }),
+        body: JSON.stringify({ image: base64 }),
+        signal: controller.signal,
       });
+      clearTimeout(timeout);
       const data = await response.json();
       if (data.success) { setParsed(data.recipe); setStep('review'); }
       else { setError('Could not parse recipe. Try again.'); }
@@ -1111,9 +1115,211 @@ function UseSoonScreen({ inventory, navigation }) {
 }
 
 // ── INVENTORY SCREEN ───────────────────────────────────────
-function InventoryScreen({ inventory, onAdd, onEdit, onDelete }) {
+function ReceiptScanModal({ visible, onClose, onAddItems }) {
+  const [step, setStep] = useState('scan');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [scannedItems, setScannedItems] = useState([]);
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [editingIndex, setEditingIndex] = useState(null);
+
+  function reset() {
+    setStep('scan');
+    setLoading(false);
+    setError(null);
+    setScannedItems([]);
+    setSelectedIds(new Set());
+    setEditingIndex(null);
+  }
+
+  async function handleScan(useCamera) {
+    setError(null);
+    const permissionResult = useCamera
+      ? await ImagePicker.requestCameraPermissionsAsync()
+      : await ImagePicker.requestMediaLibraryPermissionsAsync();
+
+    if (!permissionResult.granted) {
+      setError('Permission denied. Please allow access in Settings.');
+      return;
+    }
+
+    const result = useCamera
+      ? await ImagePicker.launchCameraAsync({ base64: true, quality: 0.7 })
+      : await ImagePicker.launchImageLibraryAsync({ base64: true, quality: 0.7 });
+
+    if (result.canceled) return;
+
+    setLoading(true);
+    try {
+      const base64 = result.assets[0].base64;
+      const response = await fetch(`${PI_SERVER}/scan-receipt`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: base64 }),
+      });
+      const data = await response.json();
+      if (!data.success) throw new Error(data.error);
+      setScannedItems(data.items);
+      setSelectedIds(new Set(data.items.map((_, i) => i)));
+      setStep('review');
+    } catch (e) {
+      setError(`Scan failed: ${e.message}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function toggleItem(index) {
+    if (editingIndex === index) return;
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      next.has(index) ? next.delete(index) : next.add(index);
+      return next;
+    });
+  }
+
+  function updateItem(index, field, value) {
+    setScannedItems(prev => prev.map((item, i) => i === index ? { ...item, [field]: value } : item));
+  }
+
+  function handleConfirm() {
+    const toAdd = scannedItems
+      .filter((_, i) => selectedIds.has(i))
+      .map(item => ({
+        ...item,
+        id: Date.now() + Math.random(),
+        expiryDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      }));
+    onAddItems(toAdd);
+    reset();
+    onClose();
+  }
+
+  function renderReviewItem(item, i) {
+    const isEditing = editingIndex === i;
+    const isSelected = selectedIds.has(i);
+
+    return (
+      <View key={i} style={[styles.scanItem, !isSelected && !isEditing && styles.scanItemDeselected]}>
+        <TouchableOpacity
+          style={[styles.shopCheck, isSelected && styles.shopCheckDone]}
+          onPress={() => toggleItem(i)}
+        >
+          {isSelected && <Text style={styles.shopCheckMark}>✓</Text>}
+        </TouchableOpacity>
+
+        <View style={styles.shopInfo}>
+          {isEditing ? (
+            <View style={styles.scanEditForm}>
+              <TextInput
+                style={styles.scanEditInput}
+                value={item.name}
+                onChangeText={v => updateItem(i, 'name', v)}
+                placeholder="Item name"
+                autoFocus
+              />
+              <View style={styles.scanEditRow}>
+                <TextInput
+                  style={[styles.scanEditInput, { flex: 1 }]}
+                  value={item.quantity ? String(item.quantity) : ''}
+                  onChangeText={v => updateItem(i, 'quantity', v ? parseFloat(v) : null)}
+                  placeholder="Qty"
+                  keyboardType="decimal-pad"
+                />
+                <TextInput
+                  style={[styles.scanEditInput, { flex: 1 }]}
+                  value={item.unit || ''}
+                  onChangeText={v => updateItem(i, 'unit', v || null)}
+                  placeholder="Unit"
+                />
+              </View>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 6 }}>
+                <View style={{ flexDirection: 'row', gap: 6 }}>
+                  {['Produce','Meat','Dairy','Deli','Bakery','Frozen','Pantry','Beverages','Nuts & Dried Fruit','Other'].map(cat => (
+                    <TouchableOpacity
+                      key={cat}
+                      style={[styles.scanCategoryChip, item.category === cat && styles.scanCategoryChipActive]}
+                      onPress={() => updateItem(i, 'category', cat)}
+                    >
+                      <Text style={[styles.scanCategoryChipText, item.category === cat && styles.scanCategoryChipTextActive]}>{cat}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </ScrollView>
+              <TouchableOpacity style={styles.scanEditDone} onPress={() => setEditingIndex(null)}>
+                <Text style={styles.scanEditDoneText}>Done</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <TouchableOpacity onPress={() => setEditingIndex(i)} style={{ flex: 1 }}>
+              <Text style={[styles.shopName, !isSelected && styles.shopNameChecked]}>{item.name}</Text>
+              <Text style={styles.shopRecipe}>
+                {item.category}{item.quantity ? ` · ${item.quantity}${item.unit ? ' ' + item.unit : ''}` : ''} · tap to edit
+              </Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      </View>
+    );
+  }
+
+  return (
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet">
+      <SafeAreaView style={styles.modalContainer}>
+        <View style={styles.modalHeader}>
+          <TouchableOpacity onPress={() => { reset(); onClose(); }}>
+            <Text style={styles.modalCancel}>Cancel</Text>
+          </TouchableOpacity>
+          <Text style={styles.modalTitle}>Scan Receipt</Text>
+          {step === 'review'
+            ? <TouchableOpacity onPress={handleConfirm}>
+                <Text style={styles.modalDone}>Add {selectedIds.size}</Text>
+              </TouchableOpacity>
+            : <View style={{ width: 60 }} />
+          }
+        </View>
+
+        {step === 'scan' && (
+          <View style={styles.scanContainer}>
+            {loading ? (
+              <View style={styles.scanLoading}>
+                <ActivityIndicator size="large" color="#007AFF" />
+                <Text style={styles.scanLoadingText}>Reading your receipt...</Text>
+              </View>
+            ) : (
+              <>
+                <Text style={styles.scanHero}>📷</Text>
+                <Text style={styles.scanTitle}>Scan a Receipt</Text>
+                <Text style={styles.scanSub}>Take a photo or choose from your library. Claude will extract your grocery items automatically.</Text>
+                {error && <Text style={styles.scanError}>{error}</Text>}
+                <TouchableOpacity style={styles.scanButton} onPress={() => handleScan(true)}>
+                  <Text style={styles.scanButtonText}>Take Photo</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.scanButtonSecondary} onPress={() => handleScan(false)}>
+                  <Text style={styles.scanButtonSecondaryText}>Choose from Library</Text>
+                </TouchableOpacity>
+              </>
+            )}
+          </View>
+        )}
+
+        {step === 'review' && (
+          <ScrollView style={styles.scrollView} keyboardShouldPersistTaps="handled">
+            <Text style={styles.scanReviewHeader}>
+              Found {scannedItems.length} items — tap an item to edit, tap the circle to deselect
+            </Text>
+            {scannedItems.map((item, i) => renderReviewItem(item, i))}
+            <View style={{ height: 40 }} />
+          </ScrollView>
+        )}
+      </SafeAreaView>
+    </Modal>
+  );
+}
+function InventoryScreen({ inventory, onAdd, onEdit, onDelete, onScanAdd }) {
   const [modalVisible, setModalVisible] = useState(false);
   const [selectedItem, setSelectedItem] = useState(null);
+  const [scanModalVisible, setScanModalVisible] = useState(false);
 
   const grouped = CATEGORIES.reduce((acc, cat) => {
     const items = inventory.filter(i => i.category === cat);
@@ -1157,9 +1363,19 @@ function InventoryScreen({ inventory, onAdd, onEdit, onDelete }) {
         ))}
         <View style={{ height: 100 }} />
       </ScrollView>
-      <TouchableOpacity style={styles.fab} onPress={openAdd}>
-        <Text style={styles.fabText}>+ Add Item</Text>
-      </TouchableOpacity>
+      <View style={styles.fabRow}>
+        <TouchableOpacity style={[styles.fab, styles.fabSecondary]} onPress={() => setScanModalVisible(true)}>
+          <Text style={styles.fabText}>📷 Scan Receipt</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.fab} onPress={openAdd}>
+          <Text style={styles.fabText}>+ Add Item</Text>
+        </TouchableOpacity>
+      </View>
+      <ReceiptScanModal
+        visible={scanModalVisible}
+        onClose={() => setScanModalVisible(false)}
+        onAddItems={onScanAdd}
+      />
       <ItemModal visible={modalVisible} item={selectedItem} onSave={handleSave} onDelete={handleDelete} onClose={() => setModalVisible(false)} />
     </SafeAreaView>
   );
@@ -1272,7 +1488,7 @@ export default function App() {
           {() => <UseSoonStack inventory={inventory} favorites={favorites} onToggleFavorite={handleToggleFavorite} allRecipes={allRecipes} onAddToList={handleAddToList} />}
         </Tab.Screen>
         <Tab.Screen name="Inventory" options={{ tabBarIcon: () => <Text style={{ fontSize: 20 }}>🥦</Text> }}>
-          {() => <InventoryScreen inventory={inventory} onAdd={handleAdd} onEdit={handleEdit} onDelete={handleDelete} />}
+          {() => <InventoryScreen inventory={inventory} onAdd={handleAdd} onEdit={handleEdit} onDelete={handleDelete} onScanAdd={(items) => setInventory(prev => [...prev, ...items])} />}
         </Tab.Screen>
         <Tab.Screen name="Recipes" options={{ tabBarIcon: () => <Text style={{ fontSize: 20 }}>🍳</Text> }}>
           {() => <RecipesStack favorites={favorites} onToggleFavorite={handleToggleFavorite} allRecipes={allRecipes} onImportSave={handleImportSave} onAddToList={handleAddToList} inventory={inventory} />}
@@ -1304,8 +1520,8 @@ const styles = StyleSheet.create({
   expiryDate: { fontSize: 14, fontWeight: '500', color: '#1C1C1E' },
   daysLeft: { fontSize: 12, fontWeight: '600', marginTop: 2 },
   chevron: { fontSize: 20, color: '#C7C7CC', marginLeft: 8 },
-  fab: { position: 'absolute', bottom: 24, right: 24, backgroundColor: '#007AFF', paddingHorizontal: 20, paddingVertical: 14, borderRadius: 30, shadowColor: '#007AFF', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8 },
-  fabText: { color: '#FFFFFF', fontWeight: '700', fontSize: 16 },
+  fab: { flex: 1, backgroundColor: '#007AFF', borderRadius: 28, paddingVertical: 14, alignItems: 'center', justifyContent: 'center' },
+  fabText: { color: '#ffffff', fontWeight: '700', fontSize: 16 },
   recipeActions: { marginHorizontal: 16, marginBottom: 8, gap: 8 },
   actionButton: { backgroundColor: '#007AFF', borderRadius: 12, paddingVertical: 14, alignItems: 'center' },
   actionButtonSecondary: { backgroundColor: '#F0F7FF', borderWidth: 1, borderColor: '#007AFF' },
@@ -1395,4 +1611,29 @@ const styles = StyleSheet.create({
   addItemButton: { marginHorizontal: 16, marginVertical: 8, backgroundColor: '#F2F2F7', borderRadius: 14, paddingVertical: 14, alignItems: 'center', borderWidth: 1.5, borderColor: '#007AFF' },
   addItemButtonText: { color: '#007AFF', fontWeight: '600', fontSize: 16 },
   addItemForm: { paddingHorizontal: 16, paddingTop: 16 }, 
+  fabRow: { position: 'absolute', bottom: 24, left: 16, right: 16, flexDirection: 'row', gap: 12, justifyContent: 'center' },
+  fabSecondary: { backgroundColor: '#007AFF', borderWidth: 1.5, borderColor: '#007AFF' },
+  scanContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32 },
+  scanLoading: { alignItems: 'center', gap: 16 },
+  scanLoadingText: { fontSize: 16, color: '#8E8E93' },
+  scanHero: { fontSize: 64, marginBottom: 16 },
+  scanTitle: { fontSize: 24, fontWeight: '700', color: '#1C1C1E', marginBottom: 8, textAlign: 'center' },
+  scanSub: { fontSize: 15, color: '#8E8E93', textAlign: 'center', lineHeight: 22, marginBottom: 32 },
+  scanError: { color: '#FF3B30', fontSize: 14, marginBottom: 16, textAlign: 'center' },
+  scanButton: { backgroundColor: '#007AFF', borderRadius: 14, paddingVertical: 14, paddingHorizontal: 32, width: '100%', alignItems: 'center', marginBottom: 12 },
+  scanButtonText: { color: '#FFFFFF', fontWeight: '600', fontSize: 16 },
+  scanButtonSecondary: { backgroundColor: '#F2F2F7', borderRadius: 14, paddingVertical: 14, paddingHorizontal: 32, width: '100%', alignItems: 'center', borderWidth: 1.5, borderColor: '#007AFF' },
+  scanButtonSecondaryText: { color: '#007AFF', fontWeight: '600', fontSize: 16 },
+  scanReviewHeader: { fontSize: 14, color: '#8E8E93', paddingHorizontal: 16, paddingVertical: 12 },
+  scanItem: { backgroundColor: '#FFFFFF', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, marginHorizontal: 16, marginBottom: 8, borderRadius: 12, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 4 },
+  scanItemDeselected: { opacity: 0.4 },
+  scanEditForm: { flex: 1, gap: 6 },
+  scanEditRow: { flexDirection: 'row', gap: 8 },
+  scanEditInput: { backgroundColor: '#F2F2F7', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7, fontSize: 15, color: '#1C1C1E' },
+  scanEditDone: { alignSelf: 'flex-start', marginTop: 6, paddingVertical: 4, paddingHorizontal: 12, backgroundColor: '#007AFF', borderRadius: 8 },
+  scanEditDoneText: { color: '#FFFFFF', fontWeight: '600', fontSize: 13 },
+  scanCategoryChip: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12, backgroundColor: '#F2F2F7', borderWidth: 1, borderColor: '#E5E5EA' },
+  scanCategoryChipActive: { backgroundColor: '#007AFF', borderColor: '#007AFF' },
+  scanCategoryChipText: { fontSize: 12, color: '#8E8E93', fontWeight: '500' },
+  scanCategoryChipTextActive: { color: '#FFFFFF' },
 })
