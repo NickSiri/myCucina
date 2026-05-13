@@ -3,6 +3,7 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
 import { useState, useEffect } from 'react';
+import * as ImagePicker from 'expo-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   StyleSheet, Text, View, ScrollView, TouchableOpacity,
@@ -1260,7 +1261,7 @@ export default function App() {
                   id: Date.now().toString(),
                   name,
                   quantity: quantity || null,
-                  unit: unit || null,
+                  unit: unit ||null,
                   recipes: ['Manual'],
                   checked: false,
                   category,
