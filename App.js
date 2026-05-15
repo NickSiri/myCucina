@@ -2,7 +2,7 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, Component } from 'react';
 import * as ImagePicker from 'expo-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { WebView } from 'react-native-webview';
@@ -23,27 +23,6 @@ const BUILTIN_RECIPES = [
       {name: 'Oregano', quantity: 1, unit: 'tsp', prep: null},
     ],
     steps: ['Season chicken with salt and pepper.','Brown chicken in olive oil over medium-high heat, 4 min per side. Remove and set aside.','Sauté onion and garlic in same pan until soft, about 3 minutes.','Add tomatoes, broth, and oregano. Stir to combine.','Return chicken to pan. Simmer covered for 30 minutes until cooked through.','Serve over pasta or crusty bread.'],
-  },
-  {
-    id: 99, name: 'Shopping List Display Test', time: '60 min', difficulty: 'Hard', keywords: [],
-    ingredients: [
-      {name: 'Roma Tomato', quantity: 4, unit: null, prep: null},
-      {name: 'Pineapple', quantity: 1, unit: null, prep: 'sliced'},
-      {name: 'Red Grapes', quantity: 2, unit: 'cup', prep: null},
-      {name: 'Cilantro', quantity: 4, unit: 'tbsp', prep: 'chopped'},
-      {name: 'Cherry Tomato', quantity: 1, unit: 'cup', prep: null},
-      {name: 'Black Bean', quantity: 2, unit: null, prep: null},
-      {name: 'Chicken Broth', quantity: 1, unit: null, prep: null},
-      {name: 'Instant Rice', quantity: 1, unit: 'box', prep: null},
-      {name: 'Olive Oil', quantity: 3, unit: 'tbsp', prep: null},
-      {name: 'Butter', quantity: 0.5, unit: 'cup', prep: null},
-      {name: 'Chicken Thigh', quantity: 1.5, unit: 'lb', prep: null},
-      {name: 'Parmesan', quantity: 0.5, unit: 'cup', prep: 'grated'},
-      {name: 'Frozen Peas', quantity: 1, unit: 'cup', prep: null},
-      {name: 'Garlic', quantity: 4, unit: null, prep: 'minced'},
-      {name: 'Yellow Onion', quantity: 1, unit: null, prep: 'diced'},
-    ],
-    steps: ['This recipe is just for testing the shopping list display.'],
   },
   {
     id: 2, name: 'Chicken Stir Fry', time: '20 min', difficulty: 'Easy', keywords: ['chicken', 'cabbage'],
@@ -681,10 +660,10 @@ function ImportRecipeModal({ visible, onClose, onSave }) {
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 30000);
-      const response = await fetch(`${PI_SERVER}/scan-receipt`, {
+      const response = await fetch(`${PI_SERVER}/parse-recipe`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image: base64 }),
+        body: JSON.stringify({ text: rawText }),
         signal: controller.signal,
       });
       clearTimeout(timeout);
@@ -768,15 +747,20 @@ function TonightModal({ visible, onClose, inventory }) {
     setSuggestions(null);
     try {
       const itemList = inventory.map(item => ({ name: item.name, daysLeft: Math.max(0, getDaysUntilExpiry(item.expiryDate)) }));
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 30000);
       const response = await fetch(`${PI_SERVER}/suggest`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ inventory: itemList }),
+        signal: controller.signal,
       });
+      clearTimeout(timeout);
       const data = await response.json();
+      if (!data.suggestions) throw new Error(data.error || 'No suggestions returned');
       setSuggestions(data.suggestions);
     } catch (e) {
-      setError(`Error: ${e.message}`);
+      setError(e.name === 'AbortError' ? 'The server took too long to respond. Please try again.' : `Couldn't reach the kitchen assistant. Check your connection and try again.`);
     } finally {
       setLoading(false);
     }
@@ -1166,7 +1150,6 @@ function ReceiptScanModal({ visible, onClose, onAddItems }) {
       });
       const data = await response.json();
       if (!data.success) throw new Error(data.error);
-      alert(`Got ${data.items.length} items: ${JSON.stringify(data.items).slice(0, 200)}`);
       setScannedItems(data.items);
       setSelectedIds(new Set(data.items.map((_, i) => i)));
       setStep('review');
@@ -1665,7 +1648,30 @@ function FavoritesStack({ favorites, onToggleFavorite, allRecipes, onAddToList }
   );
 }
 
-export default function App() {
+class ErrorBoundary extends Component {
+  state = { hasError: false };
+  static getDerivedStateFromError() { return { hasError: true }; }
+  componentDidCatch(error, info) { console.error('Uncaught error:', error, info); }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <SafeAreaView style={[styles.container, { justifyContent: 'center', alignItems: 'center', padding: 32 }]}>
+          <Text style={styles.placeholderText}>🍳</Text>
+          <Text style={styles.placeholderLabel}>Something went wrong</Text>
+          <Text style={[styles.placeholderSub, { textAlign: 'center', marginTop: 8 }]}>
+            Please fully close and reopen myCucina. Your saved data is safe.
+          </Text>
+          <TouchableOpacity style={[styles.addButton, { marginTop: 24, paddingHorizontal: 32 }]} onPress={() => this.setState({ hasError: false })}>
+            <Text style={styles.addButtonText}>Try Again</Text>
+          </TouchableOpacity>
+        </SafeAreaView>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+function AppRoot() {
   const [inventory, setInventory] = useState([]);
   const [favorites, setFavorites] = useState([]);
   const [customRecipes, setCustomRecipes] = useState([]);
@@ -1750,6 +1756,14 @@ export default function App() {
         </Tab.Screen>
       </Tab.Navigator>
     </NavigationContainer>
+  );
+}
+
+export default function App() {
+  return (
+    <ErrorBoundary>
+      <AppRoot />
+    </ErrorBoundary>
   );
 }
 
@@ -1855,7 +1869,7 @@ const styles = StyleSheet.create({
   shopNameRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   shopQty: { fontSize: 14, color: '#8E8E93', fontWeight: '400' }, 
   shopName: { fontSize: 16, fontWeight: '500', color: '#1C1C1E' },
-  shopNameChecked: { textDecorationLine: 'line-through', color: '#711c1c' },
+  shopNameChecked: { textDecorationLine: 'line-through', color: '#8E8E93' },
   shopRecipe: { fontSize: 13, color: '#8E8E93', marginTop: 2 },
   shopInventoryNote: { fontSize: 12, marginTop: 3, fontWeight: '500' },
   clearButton: { marginHorizontal: 16, marginTop: 8, backgroundColor: '#FFF2F2', borderRadius: 12, paddingVertical: 14, alignItems: 'center', borderWidth: 1, borderColor: '#FFD0D0' },
@@ -1881,7 +1895,7 @@ const styles = StyleSheet.create({
   scanItemDeselected: { opacity: 0.4 },
   scanEditForm: { flex: 1, gap: 6 },
   scanEditRow: { flexDirection: 'row', gap: 8 },
-  scanEditInput: { backgroundColor: '#070712', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7, fontSize: 15, color: '#1C1C1E' },
+  scanEditInput: { backgroundColor: '#FFFFFF', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7, fontSize: 15, color: '#1C1C1E', borderWidth: 1, borderColor: '#E5E5EA' },
   scanEditDone: { alignSelf: 'flex-start', marginTop: 6, paddingVertical: 4, paddingHorizontal: 12, backgroundColor: '#007AFF', borderRadius: 8 },
   scanEditDoneText: { color: '#FFFFFF', fontWeight: '600', fontSize: 13 },
   scanCategoryChip: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12, backgroundColor: '#F2F2F7', borderWidth: 1, borderColor: '#E5E5EA' },

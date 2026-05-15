@@ -40,3 +40,6 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# stale exported copies of backend source (server.py is the source of truth)
+*.rtf
