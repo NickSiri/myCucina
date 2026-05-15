@@ -2,9 +2,10 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import * as ImagePicker from 'expo-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { WebView } from 'react-native-webview';
 import {
   StyleSheet, Text, View, ScrollView, TouchableOpacity,
   SafeAreaView, TextInput, Modal, ActivityIndicator
@@ -1115,6 +1116,12 @@ function UseSoonScreen({ inventory, navigation }) {
 }
 
 // ── INVENTORY SCREEN ───────────────────────────────────────
+const STORES  = [
+  { name: 'Safeway', url: 'https://www.safeway.com/account/sign-in.html', historyUrl: 'safeway.com/order-account/orders' },
+  { name: 'Giant', url: 'https://giantfood.com/sign-in', historyUrl: 'giantfood.com/account/history' },
+  { name: 'Harris Teeter', url: 'https://www.harristeeter.com/account/sign-in', historyUrl: 'https://www.harristeeter.com/mypurchases/detail/' },
+  { name: 'Wegmans', url: 'https://www.wegmans.com/sign-in', historyUrl: 'https://www.wegmans.com/account/order-history/purchase-details/' },
+];
 function ReceiptScanModal({ visible, onClose, onAddItems }) {
   const [step, setStep] = useState('scan');
   const [loading, setLoading] = useState(false);
@@ -1159,6 +1166,7 @@ function ReceiptScanModal({ visible, onClose, onAddItems }) {
       });
       const data = await response.json();
       if (!data.success) throw new Error(data.error);
+      alert(`Got ${data.items.length} items: ${JSON.stringify(data.items).slice(0, 200)}`);
       setScannedItems(data.items);
       setSelectedIds(new Set(data.items.map((_, i) => i)));
       setStep('review');
@@ -1320,6 +1328,7 @@ function InventoryScreen({ inventory, onAdd, onEdit, onDelete, onScanAdd }) {
   const [modalVisible, setModalVisible] = useState(false);
   const [selectedItem, setSelectedItem] = useState(null);
   const [scanModalVisible, setScanModalVisible] = useState(false);
+  const [storeModalVisible, setStoreModalVisible] = useState(false);
 
   const grouped = CATEGORIES.reduce((acc, cat) => {
     const items = inventory.filter(i => i.category === cat);
@@ -1364,11 +1373,14 @@ function InventoryScreen({ inventory, onAdd, onEdit, onDelete, onScanAdd }) {
         <View style={{ height: 100 }} />
       </ScrollView>
       <View style={styles.fabRow}>
+        <TouchableOpacity style={[styles.fab, styles.fabSecondary]} onPress={() => setStoreModalVisible(true)}>
+          <Text style={styles.fabText}>🏪 Store</Text>
+        </TouchableOpacity>
         <TouchableOpacity style={[styles.fab, styles.fabSecondary]} onPress={() => setScanModalVisible(true)}>
-          <Text style={styles.fabText}>📷 Scan Receipt</Text>
+          <Text style={styles.fabText}>📷 Scan</Text>
         </TouchableOpacity>
         <TouchableOpacity style={styles.fab} onPress={openAdd}>
-          <Text style={styles.fabText}>+ Add Item</Text>
+          <Text style={styles.fabText}>+ Add</Text>
         </TouchableOpacity>
       </View>
       <ReceiptScanModal
@@ -1376,8 +1388,248 @@ function InventoryScreen({ inventory, onAdd, onEdit, onDelete, onScanAdd }) {
         onClose={() => setScanModalVisible(false)}
         onAddItems={onScanAdd}
       />
+     <StoreImportModal
+        visible={storeModalVisible}
+        onClose={() => setStoreModalVisible(false)}
+        onAddItems={onScanAdd}
+      />
       <ItemModal visible={modalVisible} item={selectedItem} onSave={handleSave} onDelete={handleDelete} onClose={() => setModalVisible(false)} />
     </SafeAreaView>
+  );
+}
+
+function StoreImportModal({ visible, onClose, onAddItems }) {
+  const [step, setStep] = useState('pick'); // pick | browse | review
+  const [selectedStore, setSelectedStore] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [pageHtml, setPageHtml] = useState('');
+  const pageHtmlRef = useRef('');
+  const [scannedItems, setScannedItems] = useState([]);
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [editingIndex, setEditingIndex] = useState(null);
+  const [currentUrl, setCurrentUrl] = useState('');
+  const webviewRef = useRef(null);
+
+  function reset() {
+    setStep('pick');
+    setSelectedStore(null);
+    setLoading(false);
+    setPageHtml('');
+    setScannedItems([]);
+    setSelectedIds(new Set());
+    setEditingIndex(null);
+    setCurrentUrl('');
+  }
+
+  function handleStorePick(store) {
+    setSelectedStore(store);
+    setStep('browse');
+  }
+
+  async function handleParsePage() {
+    webviewRef.current?.injectJavaScript(`
+      (function() {
+        window.ReactNativeWebView.postMessage(document.body.innerText);
+      })();
+    `);
+    await new Promise(r => setTimeout(r, 1500));
+    const html = pageHtmlRef.current;
+    if (!html) { alert('No content captured'); return; }
+    setLoading(true);
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 30000);
+      const response = await fetch(`${PI_SERVER}/parse-order`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ html, store: selectedStore.name }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+      const data = await response.json();
+      if (!data.success) throw new Error(data.error);
+      if (!data.items || data.items.length === 0) {
+        alert('No items found on this page. Try navigating to a specific order.');
+        return;
+      }
+      setScannedItems(data.items);
+      setSelectedIds(new Set(data.items.map((_, i) => i)));
+      setStep('review');
+    } catch (e) {
+      alert(`Import failed: ${e.message}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function toggleItem(index) {
+    if (editingIndex === index) return;
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      next.has(index) ? next.delete(index) : next.add(index);
+      return next;
+    });
+  }
+
+  function updateItem(index, field, value) {
+    setScannedItems(prev => prev.map((item, i) => i === index ? { ...item, [field]: value } : item));
+  }
+
+  function handleConfirm() {
+    const toAdd = scannedItems
+      .filter((_, i) => selectedIds.has(i))
+      .map(item => ({
+        ...item,
+        id: Date.now() + Math.random(),
+        expiryDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      }));
+    onAddItems(toAdd);
+    reset();
+    onClose();
+  }
+
+  const injectedJS = `
+    (function() {
+      // Extract just the visible text content, not full HTML
+      const bodyText = document.body.innerText;
+      window.ReactNativeWebView.postMessage(bodyText);
+    })();
+  `;
+
+  function isOrderPage(url) {
+    if (!url) return false;
+    return STORES.some(s => s.historyUrl && url.includes(s.historyUrl));
+  }
+
+  return (
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet">
+      <SafeAreaView style={styles.modalContainer}>
+        <View style={styles.modalHeader}>
+          <TouchableOpacity onPress={() => { reset(); onClose(); }}>
+            <Text style={styles.modalCancel}>Cancel</Text>
+          </TouchableOpacity>
+          <Text style={styles.modalTitle}>
+            {step === 'pick' ? 'Choose Store' : step === 'browse' ? selectedStore?.name : 'Review Items'}
+          </Text>
+          {step === 'review'
+            ? <TouchableOpacity onPress={handleConfirm}>
+                <Text style={styles.modalDone}>Add {selectedIds.size}</Text>
+              </TouchableOpacity>
+            : step === 'browse' && isOrderPage(currentUrl)
+            ? <TouchableOpacity onPress={handleParsePage}>
+                <Text style={styles.modalDone}>{loading ? '...' : 'Import'}</Text>
+              </TouchableOpacity>
+            : <View style={{ width: 60 }} />
+          }
+        </View>
+
+        {step === 'pick' && (
+          <View style={styles.storePicker}>
+            <Text style={styles.storePickerHint}>Sign in to your store account, navigate to your purchase history, then tap Import.</Text>
+            {STORES.map(store => (
+              <TouchableOpacity
+                key={store.name}
+                style={styles.storeRow}
+                onPress={() => handleStorePick(store)}
+              >
+                <Text style={styles.storeRowText}>{store.name}</Text>
+                <Text style={styles.chevron}>›</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
+
+        {step === 'browse' && (
+          <View style={{ flex: 1 }}>
+            {isOrderPage(currentUrl) && (
+              <View style={styles.importBanner}>
+                <Text style={styles.importBannerText}>📋 Order page detected — tap Import in the top right</Text>
+              </View>
+            )}
+            <WebView
+              ref={webviewRef}
+              source={{ uri: selectedStore.url }}
+              style={{ flex: 1 }}
+              onNavigationStateChange={state => setCurrentUrl(state.url)}
+              onMessage={e => {
+                if (e.nativeEvent.data.length > 500) {
+                  setPageHtml(e.nativeEvent.data);
+                  pageHtmlRef.current = e.nativeEvent.data;
+                }
+              }}
+              injectedJavaScript={injectedJS}
+              javaScriptEnabled
+              domStorageEnabled
+              sharedCookiesEnabled
+              onLoadEnd={() => {
+                setTimeout(() => {
+                  webviewRef.current?.injectJavaScript(`
+                    (function() {
+                      window.scrollTo(0, document.body.scrollHeight);
+                      setTimeout(() => {
+                        window.scrollTo(0, 0);
+                        window.ReactNativeWebView.postMessage(document.body.innerText);
+                      }, 1500);
+                    })();
+                  `);
+                }, 3000);
+              }}
+            />
+          </View>
+        )}
+
+        {step === 'review' && (
+          <ScrollView style={styles.scrollView} keyboardShouldPersistTaps="handled">
+            <Text style={styles.scanReviewHeader}>
+              Found {scannedItems.length} items — tap to edit, tap circle to deselect
+            </Text>
+            {scannedItems.map((item, i) => {
+              const isEditing = editingIndex === i;
+              const isSelected = selectedIds.has(i);
+              return (
+                <View key={i} style={[styles.scanItem, !isSelected && !isEditing && styles.scanItemDeselected]}>
+                  <TouchableOpacity
+                    style={[styles.shopCheck, isSelected && styles.shopCheckDone]}
+                    onPress={() => toggleItem(i)}
+                  >
+                    {isSelected && <Text style={styles.shopCheckMark}>✓</Text>}
+                  </TouchableOpacity>
+                  <View style={styles.shopInfo}>
+                    {isEditing ? (
+                      <View style={styles.scanEditForm}>
+                        <TextInput style={styles.scanEditInput} value={item.name} onChangeText={v => updateItem(i, 'name', v)} autoFocus />
+                        <View style={styles.scanEditRow}>
+                          <TextInput style={[styles.scanEditInput, { flex: 1 }]} value={item.quantity ? String(item.quantity) : ''} onChangeText={v => updateItem(i, 'quantity', v ? parseFloat(v) : null)} placeholder="Qty" keyboardType="decimal-pad" />
+                          <TextInput style={[styles.scanEditInput, { flex: 1 }]} value={item.unit || ''} onChangeText={v => updateItem(i, 'unit', v || null)} placeholder="Unit" />
+                        </View>
+                        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 6 }}>
+                          <View style={{ flexDirection: 'row', gap: 6 }}>
+                            {['Produce','Meat','Dairy','Deli','Bakery','Frozen','Pantry','Beverages','Nuts & Dried Fruit','Other'].map(cat => (
+                              <TouchableOpacity key={cat} style={[styles.scanCategoryChip, item.category === cat && styles.scanCategoryChipActive]} onPress={() => updateItem(i, 'category', cat)}>
+                                <Text style={[styles.scanCategoryChipText, item.category === cat && styles.scanCategoryChipTextActive]}>{cat}</Text>
+                              </TouchableOpacity>
+                            ))}
+                          </View>
+                        </ScrollView>
+                        <TouchableOpacity style={styles.scanEditDone} onPress={() => setEditingIndex(null)}>
+                          <Text style={styles.scanEditDoneText}>Done</Text>
+                        </TouchableOpacity>
+                      </View>
+                    ) : (
+                      <TouchableOpacity onPress={() => setEditingIndex(i)} style={{ flex: 1 }}>
+                        <Text style={[styles.shopName, !isSelected && styles.shopNameChecked]}>{item.name}</Text>
+                        <Text style={styles.shopRecipe}>{item.category}{item.quantity ? ` · ${item.quantity}${item.unit ? ' ' + item.unit : ''}` : ''} · tap to edit</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                </View>
+              );
+            })}
+            <View style={{ height: 40 }} />
+          </ScrollView>
+        )}
+      </SafeAreaView>
+    </Modal>
   );
 }
 
@@ -1629,11 +1881,17 @@ const styles = StyleSheet.create({
   scanItemDeselected: { opacity: 0.4 },
   scanEditForm: { flex: 1, gap: 6 },
   scanEditRow: { flexDirection: 'row', gap: 8 },
-  scanEditInput: { backgroundColor: '#F2F2F7', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7, fontSize: 15, color: '#1C1C1E' },
+  scanEditInput: { backgroundColor: '#070712', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7, fontSize: 15, color: '#1C1C1E' },
   scanEditDone: { alignSelf: 'flex-start', marginTop: 6, paddingVertical: 4, paddingHorizontal: 12, backgroundColor: '#007AFF', borderRadius: 8 },
   scanEditDoneText: { color: '#FFFFFF', fontWeight: '600', fontSize: 13 },
   scanCategoryChip: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12, backgroundColor: '#F2F2F7', borderWidth: 1, borderColor: '#E5E5EA' },
   scanCategoryChipActive: { backgroundColor: '#007AFF', borderColor: '#007AFF' },
   scanCategoryChipText: { fontSize: 12, color: '#8E8E93', fontWeight: '500' },
   scanCategoryChipTextActive: { color: '#FFFFFF' },
+  storePicker: { padding: 16 },
+  storePickerHint: { fontSize: 14, color: '#8E8E93', marginBottom: 16, lineHeight: 20 },
+  storeRow: { backgroundColor: '#FFFFFF', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 16, marginBottom: 8, borderRadius: 12, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 4 },
+  storeRowText: { flex: 1, fontSize: 17, color: '#1C1C1E', fontWeight: '500' },
+  importBanner: { backgroundColor: '#E8F4FD', paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#B3D9F5' },
+  importBannerText: { fontSize: 14, color: '#007AFF', fontWeight: '500' },
 })

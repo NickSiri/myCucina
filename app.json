@@ -6,7 +6,7 @@
     },
     "slug": "myCucina",
     "version": "1.0.0",
-    "orientation": "portrait",
+    "orientation": "const [storeModalVisible, setStoreModalVisible] = useState(false);ortrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
